@@ -12,6 +12,7 @@
 - **재생 중 목록**: 현재 그룹의 동영상을 썸네일로 보고 바로 재생
 - **플래그**: 동영상마다 여러 개. 칩을 누르면 그 위치로 이동, 길게 누르면 삭제
 - **잠금**: 썸네일 줄과 잠금 해제 버튼만 남고, 화면 회전도 고정
+- **랜덤 재생**: 그룹 안의 셔플 버튼은 그 그룹에서, 그룹 리스트의 "전체 랜덤"은 전체 동영상에서 하나를 평점과 상관없이 골라 재생. 재생 중 "다음 랜덤"으로 바로 다른 영상으로 넘어감 (전체 랜덤은 목록 없음)
 - **평점**: 1~5점. 그룹 리스트에는 평가된 동영상만으로 낸 평균 표시 (전체 동영상 그룹은 제외)
 - **폴더블 대응**: 접은 화면/펼친 화면(폭 600dp 이상)에 맞춰 화면 배치가 바뀜. 재생 중에는 동영상이 화면을 꽉 채우고, 화면을 탭하면 도구가 겹쳐 나타남
 
@@ -46,3 +47,7 @@ keyAlias=zampl
 keyPassword=비밀번호
 ```
 그다음 `./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`
+
+## 설치 파일 받기
+항상 같은 주소에 최신 APK 가 올라갑니다:
+https://raw.githubusercontent.com/may6ixSong/Zampl/refs/heads/claude/confident-fermi-wk0s0k/release/Zampl.apk

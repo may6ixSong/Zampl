@@ -1,5 +1,6 @@
 package com.zampl.player.ui.home
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,6 +69,7 @@ import com.zampl.player.data.ALL_GROUP_ID
 import com.zampl.player.data.GroupSummary
 import com.zampl.player.data.Library
 import com.zampl.player.data.LibraryRepository
+import com.zampl.player.data.PlayMode
 import com.zampl.player.data.SortOrder
 import com.zampl.player.data.Video
 import com.zampl.player.ui.common.ConfirmDialog
@@ -98,6 +101,16 @@ fun HomeScreen(modifier: Modifier = Modifier) {
     val openVideo: (Long, Video) -> Unit = { groupId, video ->
         ctx.startActivity(PlayerActivity.intent(ctx, groupId, video.id, sort))
     }
+    // 랜덤 재생: 평점과 상관없이 하나 골라 재생. 전체 동영상이면 목록 없이 '다음 랜덤'만.
+    val playRandom: (Long) -> Unit = { groupId ->
+        val v = lib.randomVideo(groupId)
+        if (v == null) {
+            Toast.makeText(ctx, "재생할 동영상이 없어요", Toast.LENGTH_SHORT).show()
+        } else {
+            val mode = if (groupId == ALL_GROUP_ID) PlayMode.RANDOM_ALL else PlayMode.RANDOM_GROUP
+            ctx.startActivity(PlayerActivity.intent(ctx, groupId, v.id, sort, mode))
+        }
+    }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
@@ -116,6 +129,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     repo = repo,
                     selectedId = selectedId ?: ALL_GROUP_ID,
                     onSelect = { selectedId = it },
+                    onRandomAll = { playRandom(ALL_GROUP_ID) },
                     modifier = Modifier.width(listWidth).fillMaxHeight(),
                 )
                 VerticalDivider(color = Color(0xFF2A2E36))
@@ -126,6 +140,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                         showBack = false, onBack = {},
                         onOpenPicker = { pickerFor = g.id },
                         onOpenVideo = { openVideo(g.id, it) },
+                        onRandom = { playRandom(g.id) },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                 }
@@ -133,6 +148,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
             selectedId == null -> GroupListPane(
                 lib = lib, repo = repo, selectedId = null,
                 onSelect = { selectedId = it },
+                onRandomAll = { playRandom(ALL_GROUP_ID) },
                 modifier = Modifier.fillMaxSize(),
             )
             else -> {
@@ -142,6 +158,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     showBack = true, onBack = { selectedId = null },
                     onOpenPicker = { pickerFor = g.id },
                     onOpenVideo = { openVideo(g.id, it) },
+                    onRandom = { playRandom(g.id) },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -160,6 +177,7 @@ private fun GroupListPane(
     repo: LibraryRepository,
     selectedId: Long?,
     onSelect: (Long) -> Unit,
+    onRandomAll: () -> Unit,
     modifier: Modifier,
 ) {
     var creating by remember { mutableStateOf(false) }
@@ -172,6 +190,12 @@ private fun GroupListPane(
         topBar = {
             TopAppBar(
                 title = { Text("그룹", fontWeight = FontWeight.Bold) },
+                actions = {
+                    TextButton(onClick = onRandomAll) {
+                        Icon(Icons.Default.Shuffle, null, modifier = Modifier.size(18.dp))
+                        Text(" 전체 랜덤")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
@@ -294,6 +318,7 @@ private fun GroupDetailPane(
     onBack: () -> Unit,
     onOpenPicker: () -> Unit,
     onOpenVideo: (Video) -> Unit,
+    onRandom: () -> Unit,
     modifier: Modifier,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -320,6 +345,7 @@ private fun GroupDetailPane(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onRandom) { Icon(Icons.Default.Shuffle, "랜덤 재생") }
                     if (!group.isAll) {
                         IconButton(onClick = onOpenPicker) { Icon(Icons.Default.Add, "동영상 추가") }
                         Box {

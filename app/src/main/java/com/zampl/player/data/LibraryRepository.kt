@@ -15,6 +15,9 @@ import kotlinx.coroutines.sync.withLock
 
 const val ALL_GROUP_ID = -1L
 
+/** NORMAL: 일반 재생, RANDOM_GROUP: 그룹 안에서 랜덤, RANDOM_ALL: 전체 동영상 중 랜덤 (목록 없음) */
+enum class PlayMode { NORMAL, RANDOM_GROUP, RANDOM_ALL }
+
 enum class SortOrder(val label: String) { LATEST("최신순"), RATING("평점순"), NAME("이름순") }
 
 data class GroupSummary(
@@ -50,6 +53,13 @@ data class Library(
             )
             SortOrder.NAME -> base.sortedBy { it.name.lowercase() }
         }
+    }
+
+    /** 평점과 상관없이 균등하게 하나 고름. exclude 에 있는 것은 가능하면 피함. */
+    fun randomVideo(groupId: Long, exclude: Set<Long> = emptySet()): Video? {
+        val pool = group(groupId)?.videos ?: return null
+        val fresh = pool.filter { it.id !in exclude }
+        return (fresh.ifEmpty { pool }).randomOrNull()
     }
 
     companion object {

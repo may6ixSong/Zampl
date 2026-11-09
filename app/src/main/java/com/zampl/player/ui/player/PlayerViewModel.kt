@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.SeekParameters
 import com.zampl.player.ZamplApp
 import com.zampl.player.data.FlagEntity
 import com.zampl.player.data.Library
+import com.zampl.player.data.PlayMode
 import com.zampl.player.data.SortOrder
 import com.zampl.player.data.Video
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +47,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     var groupId: Long = 0; private set
     var sort: SortOrder = SortOrder.LATEST; private set
+    var mode: PlayMode = PlayMode.NORMAL; private set
     private var initialized = false
+    /** 랜덤 재생에서 이미 본 동영상 (다 볼 때까지 겹치지 않게) */
+    private val randomHistory = HashSet<Long>()
 
     val current = MutableStateFlow<Video?>(null)
     val isPlaying = MutableStateFlow(false)
@@ -90,11 +94,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun init(groupId: Long, videoId: Long, sort: SortOrder) {
+    fun init(groupId: Long, videoId: Long, sort: SortOrder, mode: PlayMode) {
         if (initialized) return
         initialized = true
         this.groupId = groupId
         this.sort = sort
+        this.mode = mode
         if (!library.value.loaded) repo.refresh()
         viewModelScope.launch {
             val lib = library.first { it.loaded }
@@ -113,6 +118,21 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         frameKey = null
         frames.clear()
         if (lastFrameCount > 0) requestFrames(lastFrameCount)
+    }
+
+    /** 랜덤 재생: 지금 영상이 마음에 안 들 때 다음 랜덤 영상으로. */
+    fun nextRandom(): Boolean {
+        val lib = library.value
+        val pool = lib.group(groupId)?.videos.orEmpty()
+        current.value?.let { randomHistory += it.id }
+        if (pool.none { it.id !in randomHistory }) {
+            randomHistory.clear()
+            current.value?.let { randomHistory += it.id }
+        }
+        val next = lib.randomVideo(groupId, randomHistory) ?: return false
+        if (next.id == current.value?.id) return false
+        play(next)
+        return true
     }
 
     fun togglePlay() {

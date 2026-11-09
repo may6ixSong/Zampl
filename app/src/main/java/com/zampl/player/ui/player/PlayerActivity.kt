@@ -14,6 +14,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.zampl.player.data.PlayMode
 import com.zampl.player.data.SortOrder
 import com.zampl.player.ui.theme.ZamplTheme
 import kotlinx.coroutines.launch
@@ -36,6 +37,7 @@ class PlayerActivity : ComponentActivity() {
             groupId = intent.getLongExtra(EXTRA_GROUP, -1L),
             videoId = intent.getLongExtra(EXTRA_VIDEO, -1L),
             sort = SortOrder.entries.getOrElse(intent.getIntExtra(EXTRA_SORT, 0)) { SortOrder.LATEST },
+            mode = PlayMode.entries.getOrElse(intent.getIntExtra(EXTRA_MODE, 0)) { PlayMode.NORMAL },
         )
 
         // 잠금 중에는 폰을 돌려도 화면이 회전하지 않게 함. 해제하면 폰 설정(자동 회전)을 따름.
@@ -74,11 +76,13 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_GROUP = "group"
         private const val EXTRA_VIDEO = "video"
         private const val EXTRA_SORT = "sort"
+        private const val EXTRA_MODE = "mode"
 
-        fun intent(ctx: Context, groupId: Long, videoId: Long, sort: SortOrder) =
+        fun intent(ctx: Context, groupId: Long, videoId: Long, sort: SortOrder, mode: PlayMode = PlayMode.NORMAL) =
             Intent(ctx, PlayerActivity::class.java)
                 .putExtra(EXTRA_GROUP, groupId)
                 .putExtra(EXTRA_VIDEO, videoId)
                 .putExtra(EXTRA_SORT, sort.ordinal)
+                .putExtra(EXTRA_MODE, mode.ordinal)
     }
 }

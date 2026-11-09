@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.ScreenLockRotation
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.Icon
@@ -89,6 +90,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.zampl.player.data.FlagEntity
 import com.zampl.player.data.Library
+import com.zampl.player.data.PlayMode
 import com.zampl.player.data.Video
 import com.zampl.player.ui.common.ConfirmDialog
 import com.zampl.player.ui.common.GroupCheckList
@@ -225,7 +227,12 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                     Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                         Text(video?.name ?: "", color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val idx = playlist.indexOfFirst { it.id == video?.id }
-                        if (idx >= 0) Text("$groupName · ${idx + 1} / ${playlist.size}", color = Color(0xFFC9CED6), fontSize = 12.sp, maxLines = 1)
+                        val sub = when (vm.mode) {
+                            PlayMode.RANDOM_ALL -> "전체 동영상 · 랜덤 재생"
+                            PlayMode.RANDOM_GROUP -> "$groupName · 랜덤 재생"
+                            PlayMode.NORMAL -> if (idx >= 0) "$groupName · ${idx + 1} / ${playlist.size}" else ""
+                        }
+                        if (sub.isNotEmpty()) Text(sub, color = Color(0xFFC9CED6), fontSize = 12.sp, maxLines = 1)
                     }
                     IconButton(onClick = { panel = Panel.GROUPS }) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "그룹에 추가", tint = Color.White)
@@ -237,7 +244,10 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             Text("$rating", color = StarColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         } else Icon(Icons.Outlined.StarOutline, "평점", tint = Color.White)
                     }
-                    IconButton(onClick = { panel = Panel.LIST }) { Icon(Icons.Default.GridView, "목록", tint = Color.White) }
+                    // 전체 랜덤 재생에서는 목록을 보여주지 않음
+                    if (vm.mode != PlayMode.RANDOM_ALL) {
+                        IconButton(onClick = { panel = Panel.LIST }) { Icon(Icons.Default.GridView, "목록", tint = Color.White) }
+                    }
                 }
 
                 // 가운데
@@ -277,6 +287,13 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             vm.toggleLock(); controlsVisible = false; lockedUiVisible = true; touch()
                         }
                         TimeText(position, duration, Modifier.weight(1f))
+                        if (vm.mode != PlayMode.NORMAL) {
+                            PillButton(Icons.Default.Shuffle, "다음 랜덤", Color.White) {
+                                touch()
+                                if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
+                            }
+                            Spacer(Modifier.width(8.dp))
+                        }
                         PillButton(Icons.Default.Flag, "플래그", Color(0xFFFFA3A6)) {
                             touch()
                             val pos = vm.addFlag()
@@ -459,8 +476,8 @@ private fun PillButton(icon: ImageVector, label: String, tint: Color, onClick: (
 @Composable
 private fun TimeText(position: Long, duration: Long, modifier: Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.Center) {
-        Text(formatTime(position), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Text("  /  ${formatTime(duration)}", color = Color(0xFFC9CED6), fontSize = 13.sp)
+        Text(formatTime(position), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+        Text(" / ${formatTime(duration)}", color = Color(0xFFC9CED6), fontSize = 13.sp, maxLines = 1, softWrap = false)
     }
 }
 
