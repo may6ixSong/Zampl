@@ -271,7 +271,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         .fillMaxWidth()
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000), Color(0xEE000000))))
                         .windowInsetsPadding(WindowInsets.displayCutout)
-                        .padding(top = 30.dp, bottom = 14.dp),
+                        .padding(top = 24.dp, bottom = 8.dp),
                 ) {
                     if (flags.isNotEmpty()) FlagChips(
                         flags = flags,
@@ -280,7 +280,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                     )
                     strip()
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 8.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         PillButton(Icons.Default.Lock, "잠금", Color.White) {
@@ -347,10 +347,10 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         .fillMaxWidth()
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000))))
                         .windowInsetsPadding(WindowInsets.displayCutout)
-                        .padding(top = 24.dp, bottom = 14.dp),
+                        .padding(top = 20.dp, bottom = 8.dp),
                 ) {
                     strip()
-                    TimeText(position, duration, Modifier.fillMaxWidth().padding(top = 8.dp))
+                    TimeText(position, duration, Modifier.fillMaxWidth().padding(top = 4.dp))
                 }
             }
         }
@@ -464,7 +464,7 @@ private fun PillButton(icon: ImageVector, label: String, tint: Color, onClick: (
             .clip(RoundedCornerShape(18.dp))
             .background(Color(0x26FFFFFF))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = 11.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(17.dp))
@@ -487,7 +487,7 @@ private fun FlagChips(flags: List<FlagEntity>, onClick: (FlagEntity) -> Unit, on
     LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.padding(bottom = 8.dp),
+        modifier = Modifier.padding(bottom = 6.dp),
     ) {
         items(flags, key = { it.id }) { f ->
             Row(

@@ -45,12 +45,12 @@ fun FilmStrip(
     onScrubEnd: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier.fillMaxWidth().height(58.dp)) {
+    BoxWithConstraints(modifier.fillMaxWidth().height(42.dp)) {
         val density = LocalDensity.current
         val widthPx = constraints.maxWidth.toFloat()
-        val frameW = with(density) { 30.dp.toPx() }
-        // 줄 전체 길이 ≈ 화면 폭의 2배 → 넓은 화면일수록 더 세밀하게 조절 가능
-        val count = ((widthPx * 2f) / frameW).roundToInt().coerceIn(16, 90)
+        // 갤러리 앱처럼: 줄 전체 길이 = 화면 폭 정도, 썸네일은 10~20장
+        val count = (widthPx / with(density) { 34.dp.toPx() }).roundToInt().coerceIn(10, 20)
+        val frameW = widthPx / count
         val stripLen = count * frameW
         LaunchedEffect(count) { onFrameCount(count) }
 
@@ -62,10 +62,10 @@ fun FilmStrip(
         val curDur by rememberUpdatedState(dur)
         val curLen by rememberUpdatedState(stripLen)
 
-        val vPad = with(density) { 7.dp.toPx() }
-        val playheadW = with(density) { 4.dp.toPx() }
+        val vPad = with(density) { 5.dp.toPx() }
+        val playheadW = with(density) { 3.dp.toPx() }
         val flagW = with(density) { 2.dp.toPx() }
-        val tri = with(density) { 8.dp.toPx() }
+        val tri = with(density) { 7.dp.toPx() }
 
         Canvas(
             Modifier

@@ -214,10 +214,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val tUs = ((i + 0.5) / count * duration * 1000).toLong()
                         val bmp: Bitmap? = try {
                             if (Build.VERSION.SDK_INT >= 27) {
-                                mmr.getScaledFrameAtTime(tUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 160, 160)
+                                mmr.getScaledFrameAtTime(tUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 120, 120)
                             } else {
                                 mmr.getFrameAtTime(tUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
-                                    val scale = 160f / maxOf(full.width, full.height)
+                                    val scale = 120f / maxOf(full.width, full.height)
                                     Bitmap.createScaledBitmap(full, (full.width * scale).toInt().coerceAtLeast(1), (full.height * scale).toInt().coerceAtLeast(1), true)
                                 }
                             }
