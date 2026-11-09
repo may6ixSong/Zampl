@@ -1,6 +1,9 @@
 package com.zampl.player.ui.player
 
+import android.view.Gravity
+import android.view.TextureView
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -17,6 +20,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +72,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -87,7 +94,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import com.zampl.player.data.FlagEntity
 import com.zampl.player.data.Library
 import com.zampl.player.data.PlayMode
@@ -106,6 +112,8 @@ import kotlinx.coroutines.delay
 private enum class Panel { LIST, GROUPS }
 
 private const val AUTO_HIDE_MS = 3000L
+/** 최대 확대 배율 (갤러리 앱 수준) */
+private const val MAX_ZOOM = 4f
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -135,6 +143,16 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     var flagToDelete by remember { mutableStateOf<FlagEntity?>(null) }
     var creatingGroup by remember { mutableStateOf(false) }
     var lastTouch by remember { mutableLongStateOf(0L) }
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var zoomPan by remember { mutableStateOf(Offset.Zero) }
+    var zoomLabelTick by remember { mutableIntStateOf(0) }
+    var showZoomLabel by remember { mutableStateOf(false) }
+    val videoAspect by vm.videoAspect.collectAsState()
+    // 다른 동영상으로 바뀌면 원래 크기로
+    LaunchedEffect(video?.id) { zoom = 1f; zoomPan = Offset.Zero }
+    LaunchedEffect(zoomLabelTick) {
+        if (zoomLabelTick > 0) { showZoomLabel = true; delay(900); showZoomLabel = false }
+    }
     val touch = { lastTouch = System.nanoTime() }
 
     val playlist = remember(lib, vm.groupId, vm.sort) { lib.videosOf(vm.groupId, vm.sort) }
@@ -166,24 +184,67 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         val wide = maxWidth >= 600.dp
 
         // 동영상: 화면 전체 (비율 유지)
+        // ---- 확대/축소 상태 ----
+        val screenW = constraints.maxWidth.toFloat()
+        val screenH = constraints.maxHeight.toFloat()
+        // 화면에 맞춰 보이는 동영상 크기 (확대 전)
+        val fitW: Float
+        val fitH: Float
+        if (videoAspect <= 0f || screenH <= 0f) { fitW = screenW; fitH = screenH }
+        else if (screenW / screenH > videoAspect) { fitH = screenH; fitW = screenH * videoAspect }
+        else { fitW = screenW; fitH = screenW / videoAspect }
+        // 확대했을 때 동영상 가장자리가 화면 안쪽으로 들어오지 않게 이동 범위 제한
+        fun clampPan(p: Offset, s: Float): Offset {
+            val mx = ((fitW * s - screenW) / 2f).coerceAtLeast(0f)
+            val my = ((fitH * s - screenH) / 2f).coerceAtLeast(0f)
+            return Offset(p.x.coerceIn(-mx, mx), p.y.coerceIn(-my, my))
+        }
+        LaunchedEffect(screenW, screenH, videoAspect) { zoomPan = clampPan(zoomPan, zoom) }
+
+        // 동영상: 화면 전체 (비율 유지). 확대/축소를 위해 TextureView 사용.
         AndroidView(
             factory = { c ->
-                PlayerView(c).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
-                    setKeepContentOnPlayerReset(true)
-                    player = vm.player
+                FrameLayout(c).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    val frame = AspectRatioFrameLayout(c).apply { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT }
+                    val tv = TextureView(c)
+                    frame.addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                    addView(frame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
+                    vm.player.setVideoTextureView(tv)
+                    tag = frame
                 }
+            },
+            update = { root ->
+                val frame = root.tag as AspectRatioFrameLayout
+                if (videoAspect > 0f) frame.setAspectRatio(videoAspect)
+                frame.scaleX = zoom
+                frame.scaleY = zoom
+                frame.translationX = zoomPan.x
+                frame.translationY = zoomPan.y
+            },
+            onRelease = { root ->
+                ((root.tag as AspectRatioFrameLayout).getChildAt(0) as? TextureView)?.let { vm.player.clearVideoTextureView(it) }
             },
             modifier = Modifier.fillMaxSize(),
         )
 
         // 화면 탭 → 도구 보이기/숨기기. (좌우로 밀어도 다음 영상으로 넘어가지 않음)
+        // 두 손가락으로 벌리기/오므리기 → 확대/축소 (원래 크기 ~ 4배). 확대 중에는 끌어서 이동.
         Box(
             Modifier
                 .fillMaxSize()
+                .pointerInput(locked, fitW, fitH) {
+                    if (locked) return@pointerInput
+                    detectTransformGestures { centroid, pan, gestureZoom, _ ->
+                        val old = zoom
+                        val nz = (old * gestureZoom).coerceIn(1f, MAX_ZOOM)
+                        val rel = centroid - Offset(screenW / 2f, screenH / 2f)
+                        val moved = (zoomPan - rel) * (nz / old) + rel + if (old > 1f || nz > 1f) pan else Offset.Zero
+                        zoom = nz
+                        zoomPan = if (nz <= 1.001f) Offset.Zero else clampPan(moved, nz)
+                        zoomLabelTick++
+                    }
+                }
                 .pointerInput(locked) {
                     detectTapGestures(onTap = {
                         touch()
@@ -192,6 +253,19 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                     })
                 }
         )
+
+        // 확대 배율 표시 (잠깐)
+        AnimatedVisibility(
+            visible = showZoomLabel,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 72.dp),
+        ) {
+            Text(
+                if (zoom <= 1.001f) "원래 크기" else "%.1f배".format(zoom),
+                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.background(Color(0x99000000), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
 
         val strip: @Composable () -> Unit = {
             FilmStrip(

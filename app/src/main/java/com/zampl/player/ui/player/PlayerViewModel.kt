@@ -58,6 +58,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val positionMs = MutableStateFlow(0L)
     val durationMs = MutableStateFlow(0L)
     val locked = MutableStateFlow(false)
+    /** 동영상 가로/세로 비율 (모르면 0) */
+    val videoAspect = MutableStateFlow(0f)
 
     val flags: StateFlow<List<FlagEntity>> = current
         .flatMapLatest { v -> if (v == null) flowOf(emptyList()) else repo.flags(v.id) }
@@ -76,6 +78,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         player.addListener(object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspect.value = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+                }
+            }
+
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying.value = playing
             }
