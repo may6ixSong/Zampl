@@ -1,0 +1,48 @@
+# Zampl
+
+안드로이드 전용 동영상 플레이어. 갤러리의 동영상을 그룹으로 묶어 보고, 플래그·평점을 남길 수 있습니다.
+
+## 기능
+- **그룹**: 갤러리 앨범처럼 동영상을 묶음. 한 동영상은 여러 그룹에 들어갈 수 있음. "전체 동영상"은 기본 그룹.
+  - 그룹 리스트에서 새 그룹 생성 (길게 누르면 이름 변경/삭제)
+  - 그룹 안에서 ＋ 버튼으로 전체 동영상 중 선택
+  - 재생 중 상단 아이콘으로 그룹에 추가
+- **썸네일 줄로 위치 조절**: 재생 화면 하단의 썸네일 줄을 좌우로 끌면 재생 위치가 바뀜 (가운데 흰 선 = 현재 위치)
+- **스와이프로 다음 영상 넘김 없음**
+- **재생 중 목록**: 현재 그룹의 동영상을 썸네일로 보고 바로 재생
+- **플래그**: 동영상마다 여러 개. 칩을 누르면 그 위치로 이동, 길게 누르면 삭제
+- **잠금**: 썸네일 줄과 잠금 해제 버튼만 남고, 화면 회전도 고정
+- **평점**: 1~5점. 그룹 리스트에는 평가된 동영상만으로 낸 평균 표시 (전체 동영상 그룹은 제외)
+- **폴더블 대응**: 접은 화면/펼친 화면(폭 600dp 이상)에 맞춰 화면 배치가 바뀜. 재생 중에는 동영상이 화면을 꽉 채우고, 화면을 탭하면 도구가 겹쳐 나타남
+
+## 데이터 유지 (업데이트 시)
+그룹/플래그/평점은 앱 내부 DB(Room)에 저장됩니다. 업데이트 후에도 유지되려면:
+1. **항상 같은 서명 키로 빌드**해야 합니다 (아래 참고).
+2. `applicationId`(`com.zampl.player`)를 바꾸면 안 됩니다.
+3. DB 구조를 바꿀 때는 `ZamplDatabase` 의 `version` 을 올리고 Migration 을 추가해야 합니다. (`app/schemas` 에 구조 기록이 남음)
+4. 업데이트할 때는 `versionCode` 를 올려 주세요 (`app/build.gradle.kts`).
+
+## 서명 키
+공개 저장소이므로 서명 키는 저장소에 **넣지 않습니다**. 키 파일과 비밀번호는 따로 안전하게 보관하세요. 키를 잃어버리면 같은 서명으로 업데이트할 수 없습니다.
+
+### GitHub Actions 로 자동 빌드
+저장소 **Settings → Secrets and variables → Actions → New repository secret** 에 4개 등록:
+
+| 이름 | 값 |
+|---|---|
+| `ZAMPL_KEYSTORE_BASE64` | 키 파일(`zampl-release.jks`)을 base64 로 변환한 내용 |
+| `ZAMPL_KEYSTORE_PASSWORD` | 키 비밀번호 |
+| `ZAMPL_KEY_ALIAS` | `zampl` |
+| `ZAMPL_KEY_PASSWORD` | 키 비밀번호 |
+
+등록 후 push 하면 Actions 탭의 실행 결과에서 `zampl-apk` 를 내려받아 설치할 수 있습니다.
+
+### 직접 빌드
+프로젝트 루트에 `keystore.properties` 생성 (커밋 금지, .gitignore 에 포함됨):
+```
+storeFile=/키/파일/경로/zampl-release.jks
+storePassword=비밀번호
+keyAlias=zampl
+keyPassword=비밀번호
+```
+그다음 `./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`
