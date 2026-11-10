@@ -140,6 +140,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     var panel by remember { mutableStateOf<Panel?>(null) }
     var showRating by remember { mutableStateOf(false) }
     var flagToDelete by remember { mutableStateOf<FlagEntity?>(null) }
+    var flagEditing by remember { mutableStateOf(false) }
     var creatingGroup by remember { mutableStateOf(false) }
     var lastTouch by remember { mutableLongStateOf(0L) }
     var zoom by remember { mutableFloatStateOf(1f) }
@@ -154,11 +155,17 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     val groupName = lib.group(vm.groupId)?.name ?: ""
 
     // 도구 자동 숨김 (3초)
-    LaunchedEffect(controlsVisible, isPlaying, lastTouch, scrubbing, panel, locked) {
-        if (controlsVisible && !locked && isPlaying && !scrubbing && panel == null) {
+    LaunchedEffect(controlsVisible, isPlaying, lastTouch, scrubbing, panel, locked, flagEditing) {
+        // 플래그 편집 중에는 도구를 숨기지 않음
+        if (controlsVisible && !locked && isPlaying && !scrubbing && panel == null && !flagEditing) {
             delay(AUTO_HIDE_MS); controlsVisible = false
         }
     }
+    // 도구가 숨겨지거나, 플래그가 다 지워지거나, 다른 영상으로 바뀌면 편집 종료
+    LaunchedEffect(controlsVisible, flags.isEmpty(), video?.id) {
+        if (!controlsVisible || flags.isEmpty()) flagEditing = false
+    }
+    LaunchedEffect(video?.id) { flagEditing = false }
     LaunchedEffect(lockedUiVisible, lastTouch, scrubbing) {
         if (lockedUiVisible && !scrubbing) { delay(AUTO_HIDE_MS); lockedUiVisible = false }
     }
@@ -329,7 +336,13 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                 ) {
                     if (flags.isNotEmpty()) FlagChips(
                         flags = flags,
+                        editing = flagEditing,
+                        onToggleEdit = { flagEditing = !flagEditing; touch() },
                         onClick = { vm.seekTo(it.positionMs); touch() },
+                        onDelete = {
+                            vm.deleteFlag(it); touch()
+                            Toast.makeText(ctx, "${formatTime(it.positionMs)} 플래그 삭제됨", Toast.LENGTH_SHORT).show()
+                        },
                         onLongClick = { flagToDelete = it },
                     )
                     strip()
@@ -537,26 +550,56 @@ private fun TimeText(position: Long, duration: Long, modifier: Modifier) {
 
 @kotlin.OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FlagChips(flags: List<FlagEntity>, onClick: (FlagEntity) -> Unit, onLongClick: (FlagEntity) -> Unit) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.padding(bottom = 6.dp),
-    ) {
-        items(flags, key = { it.id }) { f ->
-            Row(
-                Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(FlagColor.copy(alpha = 0.22f))
-                    .border(1.dp, FlagColor.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
-                    .combinedClickable(onClick = { onClick(f) }, onLongClick = { onLongClick(f) })
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.Flag, null, tint = Color(0xFFFFA3A6), modifier = Modifier.size(13.dp))
-                Text(" ${formatTime(f.positionMs)}", color = Color(0xFFFFC2C4), fontSize = 12.sp)
+private fun FlagChips(
+    flags: List<FlagEntity>,
+    editing: Boolean,
+    onToggleEdit: () -> Unit,
+    onClick: (FlagEntity) -> Unit,
+    onDelete: (FlagEntity) -> Unit,
+    onLongClick: (FlagEntity) -> Unit,
+) {
+    // 일반: 칩을 누르면 그 위치로 이동 (길게 누르면 삭제 확인)
+    // 편집: 칩마다 X 가 붙고, 누르면 바로 삭제
+    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        LazyRow(
+            contentPadding = PaddingValues(start = 12.dp, end = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            items(flags, key = { it.id }) { f ->
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(FlagColor.copy(alpha = if (editing) 0.35f else 0.22f))
+                        .border(1.dp, FlagColor.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                        .combinedClickable(
+                            onClick = { if (editing) onDelete(f) else onClick(f) },
+                            onLongClick = { if (!editing) onLongClick(f) },
+                        )
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Flag, null, tint = Color(0xFFFFA3A6), modifier = Modifier.size(13.dp))
+                    Text(" ${formatTime(f.positionMs)}", color = Color(0xFFFFC2C4), fontSize = 12.sp)
+                    if (editing) {
+                        Spacer(Modifier.width(4.dp))
+                        Icon(Icons.Default.Close, "삭제", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+                }
             }
         }
+        Text(
+            if (editing) "완료" else "편집",
+            color = if (editing) Color.White else Color(0xFFC9CED6),
+            fontSize = 12.sp,
+            fontWeight = if (editing) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier
+                .padding(end = 12.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (editing) FlagColor.copy(alpha = 0.6f) else Color(0x26FFFFFF))
+                .clickable(onClick = onToggleEdit)
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+        )
     }
 }
 
