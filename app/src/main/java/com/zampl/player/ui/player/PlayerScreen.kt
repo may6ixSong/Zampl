@@ -73,7 +73,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -145,14 +144,10 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     var lastTouch by remember { mutableLongStateOf(0L) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var zoomPan by remember { mutableStateOf(Offset.Zero) }
-    var zoomLabelTick by remember { mutableIntStateOf(0) }
-    var showZoomLabel by remember { mutableStateOf(false) }
     val videoAspect by vm.videoAspect.collectAsState()
     // 다른 동영상으로 바뀌면 원래 크기로
     LaunchedEffect(video?.id) { zoom = 1f; zoomPan = Offset.Zero }
-    LaunchedEffect(zoomLabelTick) {
-        if (zoomLabelTick > 0) { showZoomLabel = true; delay(900); showZoomLabel = false }
-    }
+
     val touch = { lastTouch = System.nanoTime() }
 
     val playlist = remember(lib, vm.groupId, vm.sort) { lib.videosOf(vm.groupId, vm.sort) }
@@ -229,12 +224,11 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         )
 
         // 화면 탭 → 도구 보이기/숨기기. (좌우로 밀어도 다음 영상으로 넘어가지 않음)
-        // 두 손가락으로 벌리기/오므리기 → 확대/축소 (원래 크기 ~ 4배). 확대 중에는 끌어서 이동.
+        // 두 손가락으로 벌리기/오므리기 → 확대/축소 (원래 크기 ~ 4배, 잠금 중에도 가능). 확대 중에는 끌어서 이동.
         Box(
             Modifier
                 .fillMaxSize()
-                .pointerInput(locked, fitW, fitH) {
-                    if (locked) return@pointerInput
+                .pointerInput(fitW, fitH) {
                     detectTransformGestures { centroid, pan, gestureZoom, _ ->
                         val old = zoom
                         val nz = (old * gestureZoom).coerceIn(1f, MAX_ZOOM)
@@ -242,7 +236,6 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         val moved = (zoomPan - rel) * (nz / old) + rel + if (old > 1f || nz > 1f) pan else Offset.Zero
                         zoom = nz
                         zoomPan = if (nz <= 1.001f) Offset.Zero else clampPan(moved, nz)
-                        zoomLabelTick++
                     }
                 }
                 .pointerInput(locked) {
@@ -253,19 +246,6 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                     })
                 }
         )
-
-        // 확대 배율 표시 (잠깐)
-        AnimatedVisibility(
-            visible = showZoomLabel,
-            enter = fadeIn(), exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 72.dp),
-        ) {
-            Text(
-                if (zoom <= 1.001f) "원래 크기" else "%.1f배".format(zoom),
-                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.background(Color(0x99000000), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 6.dp),
-            )
-        }
 
         val strip: @Composable () -> Unit = {
             FilmStrip(
