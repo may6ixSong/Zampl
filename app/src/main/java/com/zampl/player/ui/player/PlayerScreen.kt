@@ -20,7 +20,17 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -113,6 +123,10 @@ private enum class Panel { LIST, GROUPS }
 private const val AUTO_HIDE_MS = 3000L
 /** 최대 확대 배율 (갤러리 앱 수준) */
 private const val MAX_ZOOM = 4f
+/** 좌우 밀기에서 제외할 하단 영역 비율 */
+private const val SWIPE_EXCLUDE_BOTTOM = 0.15f
+/** 화면 폭의 이 비율 이상 밀어야 이전/다음으로 넘어감 */
+private const val SWIPE_THRESHOLD = 0.18f
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -145,6 +159,8 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     var lastTouch by remember { mutableLongStateOf(0L) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var zoomPan by remember { mutableStateOf(Offset.Zero) }
+    val swipeAnim = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     val videoAspect by vm.videoAspect.collectAsState()
     // 다른 동영상으로 바뀌면 원래 크기로
     LaunchedEffect(video?.id) { zoom = 1f; zoomPan = Offset.Zero }
@@ -221,7 +237,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                 if (videoAspect > 0f) frame.setAspectRatio(videoAspect)
                 frame.scaleX = zoom
                 frame.scaleY = zoom
-                frame.translationX = zoomPan.x
+                frame.translationX = zoomPan.x + swipeAnim.value
                 frame.translationY = zoomPan.y
             },
             onRelease = { root ->
@@ -230,19 +246,73 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
         )
 
-        // 화면 탭 → 도구 보이기/숨기기. (좌우로 밀어도 다음 영상으로 넘어가지 않음)
+        // 화면 탭 → 도구 보이기/숨기기.
+        // 좌우로 밀기 → 이전/다음 영상 (하단 15% 제외, 확대 중·잠금 중에는 동작 안 함)
         // 두 손가락으로 벌리기/오므리기 → 확대/축소 (원래 크기 ~ 4배, 잠금 중에도 가능). 확대 중에는 끌어서 이동.
         Box(
             Modifier
                 .fillMaxSize()
-                .pointerInput(fitW, fitH) {
-                    detectTransformGestures { centroid, pan, gestureZoom, _ ->
-                        val old = zoom
-                        val nz = (old * gestureZoom).coerceIn(1f, MAX_ZOOM)
-                        val rel = centroid - Offset(screenW / 2f, screenH / 2f)
-                        val moved = (zoomPan - rel) * (nz / old) + rel + if (old > 1f || nz > 1f) pan else Offset.Zero
-                        zoom = nz
-                        zoomPan = if (nz <= 1.001f) Offset.Zero else clampPan(moved, nz)
+                .pointerInput(fitW, fitH, locked) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        // 하단 15% (썸네일 줄 쪽) 에서 시작한 밀기는 이전/다음 이동에 쓰지 않음
+                        val swipeZone = !locked && down.position.y < size.height * (1f - SWIPE_EXCLUDE_BOTTOM)
+                        var mode = 0 // 0 미정, 1 좌우 밀기, 2 확대 중 이동, 3 두 손가락, -1 무시
+                        var totalX = 0f
+                        var totalY = 0f
+                        val slop = viewConfiguration.touchSlop
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.count { it.pressed }
+                            if (pressed == 0) break
+                            if (pressed >= 2) {
+                                if (mode == 1) scope.launch { swipeAnim.animateTo(0f) }
+                                mode = 3
+                                val gz = event.calculateZoom()
+                                val gp = event.calculatePan()
+                                val c = event.calculateCentroid(useCurrent = true)
+                                val old = zoom
+                                val nz = (old * gz).coerceIn(1f, MAX_ZOOM)
+                                val rel = c - Offset(screenW / 2f, screenH / 2f)
+                                val moved = (zoomPan - rel) * (nz / old) + rel + if (old > 1f || nz > 1f) gp else Offset.Zero
+                                zoom = nz
+                                zoomPan = if (nz <= 1.001f) Offset.Zero else clampPan(moved, nz)
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            } else {
+                                val ch = event.changes.first { it.pressed }
+                                val d = ch.positionChange()
+                                totalX += d.x
+                                totalY += d.y
+                                if (mode == 0 && (abs(totalX) > slop || abs(totalY) > slop)) {
+                                    mode = when {
+                                        zoom > 1.001f -> 2
+                                        swipeZone && abs(totalX) > abs(totalY) -> 1
+                                        else -> -1
+                                    }
+                                }
+                                when (mode) {
+                                    2, 3 -> if (zoom > 1.001f) { zoomPan = clampPan(zoomPan + d, zoom); ch.consume() }
+                                    1 -> {
+                                        // 갈 곳이 없는 방향은 조금만 끌려옴 (갤러리 앱처럼)
+                                        val dir = if (totalX < 0) 1 else -1
+                                        val f = if (vm.canGo(dir)) 1f else 0.2f
+                                        val x = totalX * f
+                                        scope.launch { swipeAnim.snapTo(x) }
+                                        ch.consume()
+                                    }
+                                }
+                            }
+                        }
+                        if (mode == 1) {
+                            // 오른쪽→왼쪽: 다음, 왼쪽→오른쪽: 이전. 없으면 무시.
+                            val dir = if (totalX < 0) 1 else -1
+                            if (abs(totalX) > size.width * SWIPE_THRESHOLD && vm.canGo(dir)) {
+                                vm.go(dir); touch()
+                                scope.launch { swipeAnim.snapTo(0f) }
+                            } else {
+                                scope.launch { swipeAnim.animateTo(0f) }
+                            }
+                        }
                     }
                 }
                 .pointerInput(locked) {
@@ -305,9 +375,8 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             Text("$rating", color = StarColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         } else Icon(Icons.Outlined.StarOutline, "평점", tint = Color.White)
                     }
-                    // 전체 랜덤 재생에서는 목록을 보여주지 않음
-                    if (vm.mode != PlayMode.RANDOM_ALL) {
-                        IconButton(onClick = { panel = Panel.LIST }) { Icon(Icons.Default.GridView, "목록", tint = Color.White) }
+                    IconButton(onClick = { vm.toggleLock(); controlsVisible = false; lockedUiVisible = true; touch() }) {
+                        Icon(Icons.Default.Lock, "잠금", tint = Color.White)
                     }
                 }
 
@@ -350,17 +419,6 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        PillButton(Icons.Default.Lock, "잠금", Color.White) {
-                            vm.toggleLock(); controlsVisible = false; lockedUiVisible = true; touch()
-                        }
-                        TimeText(position, duration, Modifier.weight(1f))
-                        if (vm.mode != PlayMode.NORMAL) {
-                            PillButton(Icons.Default.Shuffle, "다음 랜덤", Color.White) {
-                                touch()
-                                if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
-                            }
-                            Spacer(Modifier.width(8.dp))
-                        }
                         PillButton(Icons.Default.Flag, "플래그", Color(0xFFFFA3A6)) {
                             touch()
                             val pos = vm.addFlag()
@@ -369,6 +427,18 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                                 if (pos != null) "플래그 추가: ${formatTime(pos)}" else "이 위치에는 이미 플래그가 있어요",
                                 Toast.LENGTH_SHORT,
                             ).show()
+                        }
+                        TimeText(position, duration, Modifier.weight(1f))
+                        if (vm.mode != PlayMode.NORMAL) {
+                            PillButton(Icons.Default.Shuffle, "다음", Color.White) {
+                                touch()
+                                if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        // 전체 랜덤 재생에서는 목록을 보여주지 않음
+                        if (vm.mode != PlayMode.RANDOM_ALL) {
+                            if (vm.mode != PlayMode.NORMAL) Spacer(Modifier.width(8.dp))
+                            PillButton(Icons.Default.GridView, "목록", Color.White) { panel = Panel.LIST }
                         }
                     }
                 }
@@ -436,7 +506,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                 Panel.LIST -> PlaylistPanel(
                     title = groupName, videos = playlist, lib = lib, currentId = video?.id,
                     onClose = { panel = null },
-                    onPick = { vm.play(it); panel = null; controlsVisible = true; touch() },
+                    onPick = { vm.pick(it); panel = null; controlsVisible = true; touch() },
                 )
                 Panel.GROUPS -> video?.let { v ->
                     Column {

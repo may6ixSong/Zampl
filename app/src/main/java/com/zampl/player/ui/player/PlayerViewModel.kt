@@ -112,7 +112,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val lib = library.first { it.loaded }
             val v = lib.video(videoId)
-            if (v != null) play(v) else missing.value = true
+            if (v != null) { addToTrail(v); play(v) } else missing.value = true
         }
     }
 
@@ -128,8 +128,48 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (lastFrameCount > 0) requestFrames(lastFrameCount)
     }
 
+    // 랜덤 재생에서 지나온 순서 (좌우로 밀어 이전/다음으로 오갈 수 있게)
+    private val randomTrail = ArrayList<Long>()
+    private var trailIdx = -1
+
+    private fun currentList(): List<Video> = library.value.videosOf(groupId, sort)
+
+    /** dir: +1 다음, -1 이전. 갈 곳이 없으면 false */
+    fun canGo(dir: Int): Boolean {
+        val cur = current.value ?: return false
+        return if (mode == PlayMode.NORMAL) {
+            val list = currentList()
+            val i = list.indexOfFirst { it.id == cur.id }
+            i >= 0 && (i + dir) in list.indices
+        } else if (dir < 0) {
+            trailIdx > 0
+        } else {
+            trailIdx < randomTrail.size - 1 || (library.value.group(groupId)?.videos?.size ?: 0) > 1
+        }
+    }
+
+    fun go(dir: Int): Boolean {
+        if (!canGo(dir)) return false
+        val lib = library.value
+        if (mode == PlayMode.NORMAL) {
+            val list = currentList()
+            val i = list.indexOfFirst { it.id == current.value?.id }
+            play(list[i + dir])
+            return true
+        }
+        if (dir < 0 || trailIdx < randomTrail.size - 1) {
+            val v = lib.video(randomTrail[trailIdx + dir]) ?: return false
+            trailIdx += dir
+            play(v)
+            return true
+        }
+        return pickNewRandom()
+    }
+
     /** 랜덤 재생: 지금 영상이 마음에 안 들 때 다음 랜덤 영상으로. */
-    fun nextRandom(): Boolean {
+    fun nextRandom(): Boolean = go(1)
+
+    private fun pickNewRandom(): Boolean {
         val lib = library.value
         val pool = lib.group(groupId)?.videos.orEmpty()
         current.value?.let { randomHistory += it.id }
@@ -139,8 +179,23 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val next = lib.randomVideo(groupId, randomHistory) ?: return false
         if (next.id == current.value?.id) return false
+        addToTrail(next)
         play(next)
         return true
+    }
+
+    private fun addToTrail(v: Video) {
+        if (mode == PlayMode.NORMAL) return
+        while (randomTrail.size > trailIdx + 1) randomTrail.removeAt(randomTrail.size - 1)
+        randomTrail += v.id
+        trailIdx = randomTrail.size - 1
+    }
+
+    /** 목록에서 직접 고른 영상 재생 */
+    fun pick(v: Video) {
+        if (v.id == current.value?.id) return
+        addToTrail(v)
+        play(v)
     }
 
     fun togglePlay() {
