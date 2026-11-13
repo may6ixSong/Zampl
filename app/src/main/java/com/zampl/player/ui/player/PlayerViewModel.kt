@@ -58,6 +58,16 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val positionMs = MutableStateFlow(0L)
     val durationMs = MutableStateFlow(0L)
     val locked = MutableStateFlow(false)
+
+    // 왼손 모드: 목록/플래그 버튼 위치와 목록 패널 위치를 좌우 반대로. 앱을 다시 켜도 유지.
+    private val prefs = app.getSharedPreferences("zampl_prefs", android.content.Context.MODE_PRIVATE)
+    val leftHanded = MutableStateFlow(prefs.getBoolean("left_handed", false))
+
+    fun toggleHand() {
+        val v = !leftHanded.value
+        leftHanded.value = v
+        prefs.edit().putBoolean("left_handed", v).apply()
+    }
     /** 동영상 가로/세로 비율 (모르면 0) */
     val videoAspect = MutableStateFlow(0f)
 

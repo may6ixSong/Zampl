@@ -127,6 +127,8 @@ private const val MAX_ZOOM = 4f
 private const val SWIPE_EXCLUDE_BOTTOM = 0.15f
 /** 화면 폭의 이 비율 이상 밀어야 이전/다음으로 넘어감 */
 private const val SWIPE_THRESHOLD = 0.18f
+/** 화면 높이의 이 비율 이상 쓸어내리면 그룹 화면으로 돌아감 */
+private const val DISMISS_THRESHOLD = 0.15f
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -160,6 +162,8 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     var zoom by remember { mutableFloatStateOf(1f) }
     var zoomPan by remember { mutableStateOf(Offset.Zero) }
     val swipeAnim = remember { Animatable(0f) }
+    val dismissAnim = remember { Animatable(0f) }
+    val leftHanded by vm.leftHanded.collectAsState()
     val scope = rememberCoroutineScope()
     val videoAspect by vm.videoAspect.collectAsState()
     // 다른 동영상으로 바뀌면 원래 크기로
@@ -235,10 +239,13 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
             update = { root ->
                 val frame = root.tag as AspectRatioFrameLayout
                 if (videoAspect > 0f) frame.setAspectRatio(videoAspect)
-                frame.scaleX = zoom
-                frame.scaleY = zoom
+                // 아래로 쓸어내리는 중에는 영상이 손가락을 따라 내려가며 조금 작아짐
+                val pull = (dismissAnim.value / screenH.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                val s = zoom * (1f - pull * 0.3f)
+                frame.scaleX = s
+                frame.scaleY = s
                 frame.translationX = zoomPan.x + swipeAnim.value
-                frame.translationY = zoomPan.y
+                frame.translationY = zoomPan.y + dismissAnim.value
             },
             onRelease = { root ->
                 ((root.tag as AspectRatioFrameLayout).getChildAt(0) as? TextureView)?.let { vm.player.clearVideoTextureView(it) }
@@ -257,7 +264,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         // 하단 15% (썸네일 줄 쪽) 에서 시작한 밀기는 이전/다음 이동에 쓰지 않음
                         val swipeZone = !locked && down.position.y < size.height * (1f - SWIPE_EXCLUDE_BOTTOM)
-                        var mode = 0 // 0 미정, 1 좌우 밀기, 2 확대 중 이동, 3 두 손가락, -1 무시
+                        var mode = 0 // 0 미정, 1 좌우 밀기, 2 확대 중 이동, 3 두 손가락, 4 아래로 쓸어내려 닫기, -1 무시
                         var totalX = 0f
                         var totalY = 0f
                         val slop = viewConfiguration.touchSlop
@@ -267,6 +274,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             if (pressed == 0) break
                             if (pressed >= 2) {
                                 if (mode == 1) scope.launch { swipeAnim.animateTo(0f) }
+                                if (mode == 4) scope.launch { dismissAnim.animateTo(0f) }
                                 mode = 3
                                 val gz = event.calculateZoom()
                                 val gp = event.calculatePan()
@@ -287,6 +295,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                                     mode = when {
                                         zoom > 1.001f -> 2
                                         swipeZone && abs(totalX) > abs(totalY) -> 1
+                                        !locked && totalY > 0 && abs(totalY) > abs(totalX) -> 4
                                         else -> -1
                                     }
                                 }
@@ -300,8 +309,19 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                                         scope.launch { swipeAnim.snapTo(x) }
                                         ch.consume()
                                     }
+                                    4 -> {
+                                        controlsVisible = false
+                                        val y = totalY.coerceAtLeast(0f)
+                                        scope.launch { dismissAnim.snapTo(y) }
+                                        ch.consume()
+                                    }
                                 }
                             }
+                        }
+                        if (mode == 4) {
+                            // 충분히 내리면 그룹 화면으로 돌아감, 아니면 제자리로
+                            if (totalY > size.height * DISMISS_THRESHOLD) onExit()
+                            else scope.launch { dismissAnim.animateTo(0f) }
                         }
                         if (mode == 1) {
                             // 오른쪽→왼쪽: 다음, 왼쪽→오른쪽: 이전. 없으면 무시.
@@ -375,6 +395,19 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             Text("$rating", color = StarColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         } else Icon(Icons.Outlined.StarOutline, "평점", tint = Color.White)
                     }
+                    // 왼손/오른손 전환
+                    Text(
+                        if (leftHanded) "왼손" else "오른손",
+                        color = Color.White, fontSize = 12.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, Color(0x80FFFFFF), RoundedCornerShape(12.dp))
+                            .clickable {
+                                vm.toggleHand(); touch()
+                                Toast.makeText(ctx, if (!leftHanded) "왼손 모드" else "오른손 모드", Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
                     IconButton(onClick = { vm.toggleLock(); controlsVisible = false; lockedUiVisible = true; touch() }) {
                         Icon(Icons.Default.Lock, "잠금", tint = Color.White)
                     }
@@ -419,26 +452,43 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        PillButton(Icons.Default.Flag, "플래그", Color(0xFFFFA3A6)) {
-                            touch()
-                            val pos = vm.addFlag()
-                            Toast.makeText(
-                                ctx,
-                                if (pos != null) "플래그 추가: ${formatTime(pos)}" else "이 위치에는 이미 플래그가 있어요",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                        TimeText(position, duration, Modifier.weight(1f))
-                        if (vm.mode != PlayMode.NORMAL) {
-                            PillButton(Icons.Default.Shuffle, "다음", Color.White) {
+                        val flagButton: @Composable () -> Unit = {
+                            PillButton(Icons.Default.Flag, "플래그", Color(0xFFFFA3A6)) {
                                 touch()
-                                if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
+                                val pos = vm.addFlag()
+                                Toast.makeText(
+                                    ctx,
+                                    if (pos != null) "플래그 추가: ${formatTime(pos)}" else "이 위치에는 이미 플래그가 있어요",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                        val nextButton: @Composable () -> Unit = {
+                            if (vm.mode != PlayMode.NORMAL) {
+                                PillButton(Icons.Default.Shuffle, "다음", Color.White) {
+                                    touch()
+                                    if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         }
                         // 전체 랜덤 재생에서는 목록을 보여주지 않음
-                        if (vm.mode != PlayMode.RANDOM_ALL) {
-                            if (vm.mode != PlayMode.NORMAL) Spacer(Modifier.width(8.dp))
-                            PillButton(Icons.Default.GridView, "목록", Color.White) { panel = Panel.LIST }
+                        val listButton: @Composable () -> Unit = {
+                            if (vm.mode != PlayMode.RANDOM_ALL) {
+                                PillButton(Icons.Default.GridView, "목록", Color.White) { panel = Panel.LIST }
+                            }
+                        }
+                        val gap: @Composable () -> Unit = {
+                            if (vm.mode == PlayMode.RANDOM_GROUP) Spacer(Modifier.width(8.dp))
+                        }
+                        // 오른손: 플래그(왼쪽) … 다음 · 목록(오른쪽) / 왼손: 목록 · 다음(왼쪽) … 플래그(오른쪽)
+                        if (leftHanded) {
+                            listButton(); gap(); nextButton()
+                            TimeText(position, duration, Modifier.weight(1f))
+                            flagButton()
+                        } else {
+                            flagButton()
+                            TimeText(position, duration, Modifier.weight(1f))
+                            nextButton(); gap(); listButton()
                         }
                     }
                 }
@@ -466,9 +516,9 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                 }
                 Box(
                     Modifier
-                        .align(Alignment.CenterEnd)
+                        .align(if (leftHanded) Alignment.CenterStart else Alignment.CenterEnd)
                         .windowInsetsPadding(WindowInsets.displayCutout)
-                        .padding(end = 16.dp)
+                        .padding(horizontal = 16.dp)
                         .size(56.dp)
                         .clip(CircleShape)
                         .background(Color(0x40FFFFFF))
@@ -527,8 +577,9 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         if (wide) {
             AnimatedVisibility(
                 visible = panel != null,
-                enter = slideInHorizontally { it }, exit = slideOutHorizontally { it },
-                modifier = Modifier.align(Alignment.CenterEnd),
+                enter = slideInHorizontally { if (leftHanded) -it else it },
+                exit = slideOutHorizontally { if (leftHanded) -it else it },
+                modifier = Modifier.align(if (leftHanded) Alignment.CenterStart else Alignment.CenterEnd),
             ) {
                 Box(
                     Modifier

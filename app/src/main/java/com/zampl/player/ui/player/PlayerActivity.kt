@@ -50,7 +50,12 @@ class PlayerActivity : ComponentActivity() {
 
         setContent {
             ZamplTheme {
-                PlayerScreen(vm = vm, onExit = { finish() })
+                PlayerScreen(vm = vm, onExit = {
+                    finish()
+                    // 그룹 화면으로 부드럽게 돌아가기
+                    @Suppress("DEPRECATION")
+                    overridePendingTransition(0, android.R.anim.fade_out)
+                })
             }
         }
     }
