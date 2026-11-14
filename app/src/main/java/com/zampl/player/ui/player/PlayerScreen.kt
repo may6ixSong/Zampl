@@ -1,6 +1,15 @@
 package com.zampl.player.ui.player
 
+import android.app.Activity
+import android.os.Build
+import android.provider.MediaStore
 import android.view.Gravity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
 import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -170,6 +179,34 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     LaunchedEffect(video?.id) { zoom = 1f; zoomPan = Offset.Zero }
 
     val touch = { lastTouch = System.nanoTime() }
+
+    // ---- 동영상 지우기: 갤러리 휴지통으로 이동 (Android 11 이상, 시스템 확인창이 뜸) ----
+    var pendingDelete by remember { mutableStateOf<Pair<Long, Video?>?>(null) }
+    val trashLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        val p = pendingDelete
+        pendingDelete = null
+        if (result.resultCode == Activity.RESULT_OK && p != null) {
+            Toast.makeText(ctx, "휴지통으로 옮겼어요", Toast.LENGTH_SHORT).show()
+            vm.afterDeleted(p.first, p.second)
+            if (p.second == null) onExit()
+        }
+    }
+    val requestTrash: () -> Unit = requestTrash@{
+        val v = video ?: return@requestTrash
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Toast.makeText(ctx, "휴지통 이동은 Android 11 이상에서만 지원돼요", Toast.LENGTH_SHORT).show()
+            return@requestTrash
+        }
+        try {
+            val pi = MediaStore.createTrashRequest(ctx.contentResolver, listOf(v.uri), true)
+            pendingDelete = v.id to vm.nextAfterDelete()
+            vm.player.pause()
+            trashLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+        } catch (e: Exception) {
+            pendingDelete = null
+            Toast.makeText(ctx, "지울 수 없어요: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val playlist = remember(lib, vm.groupId, vm.sort) { lib.videosOf(vm.groupId, vm.sort) }
     val groupName = lib.group(vm.groupId)?.name ?: ""
@@ -395,6 +432,9 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             Text("$rating", color = StarColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         } else Icon(Icons.Outlined.StarOutline, "평점", tint = Color.White)
                     }
+                    IconButton(onClick = { touch(); requestTrash() }) {
+                        Icon(Icons.Outlined.Delete, "동영상 지우기 (휴지통)", tint = Color.White)
+                    }
                     // 왼손/오른손 전환
                     Text(
                         if (leftHanded) "왼손" else "오른손",
@@ -538,7 +578,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { panel = null }
             )
         }
-        val panelContent: @Composable () -> Unit = {
+        val panelContent: @Composable () -> Unit = { CompositionLocalProvider(LocalContentColor provides Color.White) {
             when (panel) {
                 Panel.LIST -> PlaylistPanel(
                     title = groupName, videos = playlist, lib = lib, currentId = video?.id,
@@ -560,7 +600,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                 }
                 null -> {}
             }
-        }
+        } }
         if (wide) {
             AnimatedVisibility(
                 visible = panel != null,

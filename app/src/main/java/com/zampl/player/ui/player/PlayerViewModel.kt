@@ -214,6 +214,30 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         trailIdx = randomTrail.size - 1
     }
 
+    /** 지금 영상을 지운 뒤 이어서 볼 영상 (없으면 null → 재생 화면 닫기) */
+    fun nextAfterDelete(): Video? {
+        val cur = current.value ?: return null
+        return if (mode == PlayMode.NORMAL) {
+            neighbor(1) ?: neighbor(-1)
+        } else {
+            library.value.randomVideo(groupId, randomHistory + cur.id)?.takeIf { it.id != cur.id }
+        }
+    }
+
+    /** 휴지통으로 옮긴 뒤 호출. next 가 있으면 이어서 재생 */
+    fun afterDeleted(deletedId: Long, next: Video?) {
+        val removedBefore = randomTrail.take(trailIdx + 1).count { it == deletedId }
+        randomTrail.removeAll { it == deletedId }
+        trailIdx = (trailIdx - removedBefore).coerceIn(-1, randomTrail.size - 1)
+        randomHistory += deletedId
+        repo.refresh()
+        if (next != null) {
+            if (mode == PlayMode.NORMAL) play(next) else { addToTrail(next); play(next) }
+        } else {
+            player.stop()
+        }
+    }
+
     /** 목록에서 직접 고른 영상 재생 */
     fun pick(v: Video) {
         if (v.id == current.value?.id) return

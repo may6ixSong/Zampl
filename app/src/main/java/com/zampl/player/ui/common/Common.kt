@@ -310,7 +310,7 @@ fun GroupCheckList(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Checkbox(checked = checked, onCheckedChange = { onToggle(g, it) })
-                Text(g.name, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                Text(g.name, fontSize = 15.sp, color = Color.White, modifier = Modifier.weight(1f))
                 Text("${g.videos.size}개", color = SubText, fontSize = 12.sp)
             }
         }
