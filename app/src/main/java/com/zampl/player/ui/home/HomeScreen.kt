@@ -216,7 +216,7 @@ private fun GroupListPane(
                         selected = g.id == selectedId,
                         modifier = Modifier.combinedClickable(
                             onClick = { onSelect(g.id) },
-                            onLongClick = { if (!g.isAll) menuFor = g },
+                            onLongClick = { if (!g.isDefault) menuFor = g },
                         ),
                     )
                     DropdownMenu(expanded = menuFor?.id == g.id, onDismissRequest = { menuFor = null }) {
@@ -273,7 +273,7 @@ private fun GroupRow(group: GroupSummary, selected: Boolean, modifier: Modifier)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(group.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                if (group.isAll) Pill("기본")
+                if (group.isDefault) Pill("기본")
             }
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -346,7 +346,7 @@ private fun GroupDetailPane(
                 },
                 actions = {
                     IconButton(onClick = onRandom) { Icon(Icons.Default.Shuffle, "랜덤 재생") }
-                    if (!group.isAll) {
+                    if (!group.isDefault) {
                         IconButton(onClick = onOpenPicker) { Icon(Icons.Default.Add, "동영상 추가") }
                         Box {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "더보기") }
@@ -375,10 +375,12 @@ private fun GroupDetailPane(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            if (group.isAll) (if (lib.loaded) "동영상이 없어요" else "불러오는 중…")
+                            if (!lib.loaded) "불러오는 중…"
+                            else if (group.isAll) "동영상이 없어요"
+                            else if (group.isUngrouped) "모든 동영상이 그룹에 들어가 있어요"
                             else "아직 동영상이 없어요", color = SubText,
                         )
-                        if (!group.isAll) TextButton(onClick = onOpenPicker) { Text("＋ 동영상 추가하기") }
+                        if (!group.isDefault) TextButton(onClick = onOpenPicker) { Text("＋ 동영상 추가하기") }
                     }
                 }
             } else {
@@ -399,7 +401,7 @@ private fun GroupDetailPane(
                             )
                             DropdownMenu(expanded = videoMenu?.id == v.id, onDismissRequest = { videoMenu = null }) {
                                 DropdownMenuItem(text = { Text("그룹에 추가") }, onClick = { groupSheetFor = v; videoMenu = null })
-                                if (!group.isAll) DropdownMenuItem(
+                                if (!group.isDefault) DropdownMenuItem(
                                     text = { Text("이 그룹에서 빼기") },
                                     onClick = { repo.removeFromGroup(group.id, listOf(v.id)); videoMenu = null },
                                 )

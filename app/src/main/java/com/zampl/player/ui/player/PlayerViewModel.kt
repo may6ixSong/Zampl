@@ -145,12 +145,27 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun currentList(): List<Video> = library.value.videosOf(groupId, sort)
 
     /** dir: +1 다음, -1 이전. 갈 곳이 없으면 false */
+    // 마지막으로 확인한 현재 영상의 목록 위치. (미분류에서 재생 중 그룹에 넣어 목록에서 빠져도 이어서 이동하기 위함)
+    private var lastIndex = -1
+
+    /** 일반 재생에서 dir 방향의 영상 */
+    private fun neighbor(dir: Int): Video? {
+        val cur = current.value ?: return null
+        val list = currentList()
+        val i = list.indexOfFirst { it.id == cur.id }
+        if (i >= 0) {
+            lastIndex = i
+            return list.getOrNull(i + dir)
+        }
+        if (lastIndex < 0) return null
+        // 현재 영상이 목록에서 빠진 경우: 그 자리에 들어온 영상이 '다음'
+        return list.getOrNull(if (dir > 0) lastIndex else lastIndex - 1)
+    }
+
     fun canGo(dir: Int): Boolean {
-        val cur = current.value ?: return false
+        current.value ?: return false
         return if (mode == PlayMode.NORMAL) {
-            val list = currentList()
-            val i = list.indexOfFirst { it.id == cur.id }
-            i >= 0 && (i + dir) in list.indices
+            neighbor(dir) != null
         } else if (dir < 0) {
             trailIdx > 0
         } else {
@@ -162,9 +177,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (!canGo(dir)) return false
         val lib = library.value
         if (mode == PlayMode.NORMAL) {
-            val list = currentList()
-            val i = list.indexOfFirst { it.id == current.value?.id }
-            play(list[i + dir])
+            play(neighbor(dir) ?: return false)
             return true
         }
         if (dir < 0 || trailIdx < randomTrail.size - 1) {

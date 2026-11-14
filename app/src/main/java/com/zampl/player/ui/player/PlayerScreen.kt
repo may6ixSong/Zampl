@@ -432,10 +432,39 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000), Color(0xEE000000))))
+                        .background(Brush.verticalGradient(0f to Color.Transparent, 0.4f to Color(0x99000000), 1f to Color(0xEE000000)))
                         .windowInsetsPadding(WindowInsets.displayCutout)
                         .padding(top = 24.dp, bottom = 8.dp),
                 ) {
+                    // 오른손: 오른쪽 아래 / 왼손: 왼쪽 아래 에 아이콘 버튼을 세로로 쌓음 (위→아래: 다음, 플래그, 목록)
+                    Column(
+                        Modifier
+                            .align(if (leftHanded) Alignment.Start else Alignment.End)
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        if (vm.mode != PlayMode.NORMAL) {
+                            StackButton(Icons.Default.Shuffle, "다음 랜덤", Color.White) {
+                                touch()
+                                if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        StackButton(Icons.Default.Flag, "플래그 추가", Color(0xFFFFA3A6)) {
+                            touch()
+                            val pos = vm.addFlag()
+                            Toast.makeText(
+                                ctx,
+                                if (pos != null) "플래그 추가: ${formatTime(pos)}" else "이 위치에는 이미 플래그가 있어요",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                        // 전체 랜덤 재생에서는 목록을 보여주지 않음
+                        if (vm.mode != PlayMode.RANDOM_ALL) {
+                            StackButton(Icons.Default.GridView, "목록", Color.White) { panel = Panel.LIST }
+                        }
+                    }
                     if (flags.isNotEmpty()) FlagChips(
                         flags = flags,
                         editing = flagEditing,
@@ -448,49 +477,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         onLongClick = { flagToDelete = it },
                     )
                     strip()
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val flagButton: @Composable () -> Unit = {
-                            PillButton(Icons.Default.Flag, "플래그", Color(0xFFFFA3A6)) {
-                                touch()
-                                val pos = vm.addFlag()
-                                Toast.makeText(
-                                    ctx,
-                                    if (pos != null) "플래그 추가: ${formatTime(pos)}" else "이 위치에는 이미 플래그가 있어요",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                        }
-                        val nextButton: @Composable () -> Unit = {
-                            if (vm.mode != PlayMode.NORMAL) {
-                                PillButton(Icons.Default.Shuffle, "다음", Color.White) {
-                                    touch()
-                                    if (!vm.nextRandom()) Toast.makeText(ctx, "다른 동영상이 없어요", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                        // 전체 랜덤 재생에서는 목록을 보여주지 않음
-                        val listButton: @Composable () -> Unit = {
-                            if (vm.mode != PlayMode.RANDOM_ALL) {
-                                PillButton(Icons.Default.GridView, "목록", Color.White) { panel = Panel.LIST }
-                            }
-                        }
-                        val gap: @Composable () -> Unit = {
-                            if (vm.mode == PlayMode.RANDOM_GROUP) Spacer(Modifier.width(8.dp))
-                        }
-                        // 오른손: 플래그(왼쪽) … 다음 · 목록(오른쪽) / 왼손: 목록 · 다음(왼쪽) … 플래그(오른쪽)
-                        if (leftHanded) {
-                            listButton(); gap(); nextButton()
-                            TimeText(position, duration, Modifier.weight(1f))
-                            flagButton()
-                        } else {
-                            flagButton()
-                            TimeText(position, duration, Modifier.weight(1f))
-                            nextButton(); gap(); listButton()
-                        }
-                    }
+                    TimeText(position, duration, Modifier.fillMaxWidth().padding(top = 4.dp))
                 }
             }
         }
@@ -645,20 +632,18 @@ private fun RoundButton(icon: ImageVector, desc: String, size: androidx.compose.
     ) { Icon(icon, desc, tint = Color.White, modifier = Modifier.size(size * 0.5f)) }
 }
 
+/** 오른쪽(왼손 모드는 왼쪽) 아래에 세로로 쌓는 동그란 아이콘 버튼 */
 @Composable
-private fun PillButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    Row(
+private fun StackButton(icon: ImageVector, desc: String, tint: Color, onClick: () -> Unit) {
+    Box(
         Modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color(0x26FFFFFF))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(17.dp))
-        Spacer(Modifier.width(5.dp))
-        Text(label, color = tint, fontSize = 13.sp)
-    }
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Color(0x66000000))
+            .border(1.dp, Color(0x33FFFFFF), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, desc, tint = tint, modifier = Modifier.size(22.dp)) }
 }
 
 @Composable

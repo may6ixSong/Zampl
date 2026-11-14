@@ -14,6 +14,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 const val ALL_GROUP_ID = -1L
+/** 어떤 그룹에도 들어있지 않은 동영상 모음 (자동) */
+const val UNGROUPED_GROUP_ID = -2L
 
 /** NORMAL: 일반 재생, RANDOM_GROUP: 그룹 안에서 랜덤, RANDOM_ALL: 전체 동영상 중 랜덤 (목록 없음) */
 enum class PlayMode { NORMAL, RANDOM_GROUP, RANDOM_ALL }
@@ -28,6 +30,9 @@ data class GroupSummary(
     val ratedCount: Int,
 ) {
     val isAll get() = id == ALL_GROUP_ID
+    val isUngrouped get() = id == UNGROUPED_GROUP_ID
+    /** 기본 그룹(전체 동영상, 미분류): 항상 있고, 이름 변경·삭제·직접 추가 불가 */
+    val isDefault get() = id < 0
 }
 
 data class Library(
@@ -42,7 +47,7 @@ data class Library(
 
     fun video(id: Long) = byId[id]
     fun group(id: Long) = groups.firstOrNull { it.id == id }
-    fun userGroups() = groups.filter { !it.isAll }
+    fun userGroups() = groups.filter { !it.isDefault }
 
     fun videosOf(groupId: Long, sort: SortOrder): List<Video> {
         val base = group(groupId)?.videos ?: emptyList()
@@ -95,6 +100,14 @@ class LibraryRepository(
         val summaries = ArrayList<GroupSummary>(groups.size + 1)
         // 전체 동영상 그룹: 항상 맨 위, 평점 표시 없음
         summaries += GroupSummary(ALL_GROUP_ID, "전체 동영상", vids, null, 0)
+        // 미분류: 어느 그룹에도 속하지 않은 동영상
+        val grouped = members.mapTo(HashSet()) { it.videoId }
+        val ungrouped = vids.filter { it.id !in grouped }
+        val ungroupedRated = ungrouped.mapNotNull { ratings[it.id] }
+        summaries += GroupSummary(
+            UNGROUPED_GROUP_ID, "미분류", ungrouped,
+            if (ungroupedRated.isEmpty()) null else ungroupedRated.average(), ungroupedRated.size,
+        )
         for (g in groups) {
             val gv = membersByGroup[g.id].orEmpty()
                 .mapNotNull { byId[it.videoId] }
@@ -159,12 +172,12 @@ class LibraryRepository(
     }
 
     fun deleteGroup(id: Long) {
-        if (id == ALL_GROUP_ID) return
+        if (id < 0) return
         scope.launch(Dispatchers.IO) { dao.deleteGroup(id) }
     }
 
     fun addToGroup(groupId: Long, videos: List<Video>) {
-        if (groupId == ALL_GROUP_ID || videos.isEmpty()) return
+        if (groupId < 0 || videos.isEmpty()) return
         scope.launch(Dispatchers.IO) {
             val now = System.currentTimeMillis()
             videos.forEach { dao.upsertVideoInfo(it.toInfo()) }
@@ -173,7 +186,7 @@ class LibraryRepository(
     }
 
     fun removeFromGroup(groupId: Long, videoIds: List<Long>) {
-        if (groupId == ALL_GROUP_ID || videoIds.isEmpty()) return
+        if (groupId < 0 || videoIds.isEmpty()) return
         scope.launch(Dispatchers.IO) { dao.deleteMemberships(groupId, videoIds) }
     }
 
