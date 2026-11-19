@@ -30,6 +30,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -38,6 +40,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -132,6 +135,8 @@ private enum class Panel { LIST, GROUPS }
 private const val AUTO_HIDE_MS = 3000L
 /** 최대 확대 배율 (갤러리 앱 수준) */
 private const val MAX_ZOOM = 4f
+// 두 번 탭했을 때 확대 배율
+private const val DOUBLE_TAP_ZOOM = 2.5f
 /** 좌우 밀기에서 제외할 하단 영역 비율 */
 private const val SWIPE_EXCLUDE_BOTTOM = 0.15f
 /** 화면 폭의 이 비율 이상 밀어야 이전/다음으로 넘어감 */
@@ -170,6 +175,8 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     var lastTouch by remember { mutableLongStateOf(0L) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var zoomPan by remember { mutableStateOf(Offset.Zero) }
+    // 두 번 탭 확대/축소 애니메이션 (두 손가락이 닿으면 멈춤)
+    var zoomAnimJob by remember { mutableStateOf<Job?>(null) }
     val swipeAnim = remember { Animatable(0f) }
     val dismissAnim = remember { Animatable(0f) }
     val leftHanded by vm.leftHanded.collectAsState()
@@ -310,6 +317,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                             val pressed = event.changes.count { it.pressed }
                             if (pressed == 0) break
                             if (pressed >= 2) {
+                                zoomAnimJob?.cancel()
                                 if (mode == 1) scope.launch { swipeAnim.animateTo(0f) }
                                 if (mode == 4) scope.launch { dismissAnim.animateTo(0f) }
                                 mode = 3
@@ -337,7 +345,8 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                                     }
                                 }
                                 when (mode) {
-                                    2, 3 -> if (zoom > 1.001f) { zoomPan = clampPan(zoomPan + d, zoom); ch.consume() }
+                                    2, 3 -> if (zoom > 1.001f) {
+                                        zoomAnimJob?.cancel() zoomPan = clampPan(zoomPan + d, zoom); ch.consume() }
                                     1 -> {
                                         // 갈 곳이 없는 방향은 조금만 끌려옴 (갤러리 앱처럼)
                                         val dir = if (totalX < 0) 1 else -1
@@ -372,12 +381,36 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         }
                     }
                 }
-                .pointerInput(locked) {
-                    detectTapGestures(onTap = {
-                        touch()
-                        if (locked) lockedUiVisible = !lockedUiVisible
-                        else controlsVisible = !controlsVisible
-                    })
+                .pointerInput(locked, fitW, fitH) {
+                    detectTapGestures(
+                        onTap = {
+                            touch()
+                            if (locked) lockedUiVisible = !lockedUiVisible
+                            else controlsVisible = !controlsVisible
+                        },
+                        // 두 번 탭 → 원래 크기면 누른 곳으로 확대, 확대 중이면 원래 크기로 (갤러리 앱처럼)
+                        onDoubleTap = { tap ->
+                            touch()
+                            zoomAnimJob?.cancel()
+                            val z0 = zoom
+                            val p0 = zoomPan
+                            val zoomIn = z0 <= 1.001f
+                            val z1 = if (zoomIn) DOUBLE_TAP_ZOOM else 1f
+                            val rel = tap - Offset(screenW / 2f, screenH / 2f)
+                            zoomAnimJob = scope.launch {
+                                animate(0f, 1f, animationSpec = tween(250)) { t, _ ->
+                                    val z = z0 + (z1 - z0) * t
+                                    zoom = z
+                                    zoomPan = if (zoomIn) {
+                                        // 누른 지점이 손가락 아래에 그대로 있도록 확대
+                                        clampPan((p0 - rel) * (z / z0) + rel, z)
+                                    } else {
+                                        clampPan(p0 * (1f - t), z)
+                                    }
+                                }
+                            }
+                        },
+                    )
                 }
         )
 
