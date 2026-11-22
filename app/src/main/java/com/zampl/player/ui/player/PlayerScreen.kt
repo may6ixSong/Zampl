@@ -346,7 +346,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                                 }
                                 when (mode) {
                                     2, 3 -> if (zoom > 1.001f) {
-                                        zoomAnimJob?.cancel() zoomPan = clampPan(zoomPan + d, zoom); ch.consume() }
+                                        zoomAnimJob?.cancel(); zoomPan = clampPan(zoomPan + d, zoom); ch.consume() }
                                     1 -> {
                                         // 갈 곳이 없는 방향은 조금만 끌려옴 (갤러리 앱처럼)
                                         val dir = if (totalX < 0) 1 else -1
