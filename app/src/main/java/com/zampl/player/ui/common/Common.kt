@@ -68,6 +68,7 @@ import coil.key.Keyer
 import coil.request.ImageRequest
 import coil.request.Options
 import com.zampl.player.data.GroupSummary
+import com.zampl.player.data.PlayItem
 import com.zampl.player.data.Video
 import com.zampl.player.ui.theme.Accent
 import com.zampl.player.ui.theme.StarColor
@@ -158,6 +159,10 @@ fun VideoCell(
     modifier: Modifier = Modifier,
     selected: Boolean? = null,
     highlighted: Boolean = false,
+    /** 왼쪽 아래 작은 표시 (예: 조합 동영상 개수) */
+    badge: String? = null,
+    /** 길이 표시를 바꿀 때 (조합 전체 길이 등) */
+    durationMs: Long = video.durationMs,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -169,8 +174,19 @@ fun VideoCell(
     ) {
         VideoThumbImage(video, Modifier.fillMaxSize())
         if (rating != null) RatingBadge(rating, Modifier.align(Alignment.TopStart).padding(4.dp))
+        if (badge != null) Text(
+            badge,
+            fontSize = 11.sp,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(4.dp)
+                .background(Accent.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 4.dp, vertical = 1.dp),
+        )
         Text(
-            formatDuration(video.durationMs),
+            formatDuration(durationMs),
             fontSize = 11.sp,
             color = Color.White,
             modifier = Modifier
@@ -198,6 +214,28 @@ fun VideoCell(
             Box(Modifier.fillMaxSize().border(3.dp, Accent, RoundedCornerShape(4.dp)))
         }
     }
+}
+
+/** 재생 항목 칸: 동영상이면 그대로, 조합이면 첫 동영상 썸네일 + 전체 길이 + "▶ N개" 표시 */
+@Composable
+fun PlayItemCell(
+    item: PlayItem,
+    rating: Int?,
+    modifier: Modifier = Modifier,
+    highlighted: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    VideoCell(
+        video = item.thumb,
+        rating = rating,
+        modifier = modifier,
+        highlighted = highlighted,
+        badge = if (item is PlayItem.Custom) "▶ ${item.segments.size}개" else null,
+        durationMs = item.durationMs,
+        onClick = onClick,
+        onLongClick = onLongClick,
+    )
 }
 
 @Composable

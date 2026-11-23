@@ -117,13 +117,14 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.zampl.player.data.FlagEntity
 import com.zampl.player.data.Library
+import com.zampl.player.data.PlayItem
 import com.zampl.player.data.PlayMode
 import com.zampl.player.data.Video
 import com.zampl.player.ui.common.ConfirmDialog
 import com.zampl.player.ui.common.GroupCheckList
 import com.zampl.player.ui.common.NameDialog
 import com.zampl.player.ui.common.RatingDialog
-import com.zampl.player.ui.common.VideoCell
+import com.zampl.player.ui.common.PlayItemCell
 import com.zampl.player.ui.common.formatTime
 import com.zampl.player.ui.theme.FlagColor
 import com.zampl.player.ui.theme.StarColor
@@ -149,7 +150,9 @@ private const val DISMISS_THRESHOLD = 0.15f
 fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     val ctx = LocalContext.current
     val lib by vm.library.collectAsState()
+    val item by vm.currentItem.collectAsState()
     val video by vm.current.collectAsState()
+    val segIndex by vm.segmentIndex.collectAsState()
     val isPlaying by vm.isPlaying.collectAsState()
     val ended by vm.ended.collectAsState()
     val position by vm.positionMs.collectAsState()
@@ -182,13 +185,14 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
     val leftHanded by vm.leftHanded.collectAsState()
     val scope = rememberCoroutineScope()
     val videoAspect by vm.videoAspect.collectAsState()
-    // 다른 동영상으로 바뀌면 원래 크기로
-    LaunchedEffect(video?.id) { zoom = 1f; zoomPan = Offset.Zero }
+    // 다른 동영상으로 바뀌면 (조합 안에서 다음 동영상으로 넘어갈 때도) 원래 크기로
+    LaunchedEffect(item?.key, segIndex) { zoom = 1f; zoomPan = Offset.Zero }
 
     val touch = { lastTouch = System.nanoTime() }
 
     // ---- 동영상 지우기: 갤러리 휴지통으로 이동 (Android 11 이상, 시스템 확인창이 뜸) ----
-    var pendingDelete by remember { mutableStateOf<Pair<Long, Video?>?>(null) }
+    var pendingDelete by remember { mutableStateOf<Pair<String, PlayItem?>?>(null) }
+    var comboToDelete by remember { mutableStateOf<PlayItem.Custom?>(null) }
     val trashLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         val p = pendingDelete
         pendingDelete = null
@@ -199,6 +203,8 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         }
     }
     val requestTrash: () -> Unit = requestTrash@{
+        // 커스텀 조합은 조합만 지움 (원본 동영상은 그대로)
+        (item as? PlayItem.Custom)?.let { comboToDelete = it; return@requestTrash }
         val v = video ?: return@requestTrash
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             Toast.makeText(ctx, "휴지통 이동은 Android 11 이상에서만 지원돼요", Toast.LENGTH_SHORT).show()
@@ -206,7 +212,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         }
         try {
             val pi = MediaStore.createTrashRequest(ctx.contentResolver, listOf(v.uri), true)
-            pendingDelete = v.id to vm.nextAfterDelete()
+            pendingDelete = "v${v.id}" to vm.nextAfterDelete()
             vm.player.pause()
             trashLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
         } catch (e: Exception) {
@@ -215,7 +221,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         }
     }
 
-    val playlist = remember(lib, vm.groupId, vm.sort) { lib.videosOf(vm.groupId, vm.sort) }
+    val playlist = remember(lib, vm.groupId, vm.sort) { lib.itemsOf(vm.groupId, vm.sort) }
     val groupName = lib.group(vm.groupId)?.name ?: ""
 
     // 도구 자동 숨김 (3초)
@@ -226,10 +232,10 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         }
     }
     // 도구가 숨겨지거나, 플래그가 다 지워지거나, 다른 영상으로 바뀌면 편집 종료
-    LaunchedEffect(controlsVisible, flags.isEmpty(), video?.id) {
+    LaunchedEffect(controlsVisible, flags.isEmpty(), item?.key) {
         if (!controlsVisible || flags.isEmpty()) flagEditing = false
     }
-    LaunchedEffect(video?.id) { flagEditing = false }
+    LaunchedEffect(item?.key) { flagEditing = false }
     LaunchedEffect(lockedUiVisible, lastTouch, scrubbing) {
         if (lockedUiVisible && !scrubbing) { delay(AUTO_HIDE_MS); lockedUiVisible = false }
     }
@@ -446,19 +452,22 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                 ) {
                     IconButton(onClick = onExit) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로", tint = Color.White) }
                     Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                        Text(video?.name ?: "", color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val idx = playlist.indexOfFirst { it.id == video?.id }
-                        val sub = when (vm.mode) {
+                        Text(item?.name ?: "", color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val idx = playlist.indexOfFirst { it.key == item?.key }
+                        val base = when (vm.mode) {
                             PlayMode.RANDOM_ALL -> "전체 동영상 · 랜덤 재생"
                             PlayMode.RANDOM_GROUP -> "$groupName · 랜덤 재생"
                             PlayMode.NORMAL -> if (idx >= 0) "$groupName · ${idx + 1} / ${playlist.size}" else ""
                         }
+                        val segs = item?.segments?.size ?: 1
+                        val sub = if (segs > 1) listOf(base, "조합 ${segIndex + 1} / $segs").filter { it.isNotEmpty() }.joinToString(" · ") else base
                         if (sub.isNotEmpty()) Text(sub, color = Color(0xFFC9CED6), fontSize = 12.sp, maxLines = 1)
                     }
-                    IconButton(onClick = { panel = Panel.GROUPS }) {
+                    // 커스텀 조합은 그룹 지정 불가
+                    if (video != null) IconButton(onClick = { panel = Panel.GROUPS }) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "그룹에 추가", tint = Color.White)
                     }
-                    val rating = video?.let { lib.ratings[it.id] }
+                    val rating = item?.let { lib.ratingOf(it) }
                     IconButton(onClick = { showRating = true }) {
                         if (rating != null) Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Filled.Star, "평점", tint = StarColor, modifier = Modifier.size(22.dp))
@@ -466,7 +475,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
                         } else Icon(Icons.Outlined.StarOutline, "평점", tint = Color.White)
                     }
                     IconButton(onClick = { touch(); requestTrash() }) {
-                        Icon(Icons.Outlined.Delete, "동영상 지우기 (휴지통)", tint = Color.White)
+                        Icon(Icons.Outlined.Delete, if (item is PlayItem.Custom) "조합 지우기" else "동영상 지우기 (휴지통)", tint = Color.White)
                     }
                     // 왼손/오른손 전환
                     Text(
@@ -614,7 +623,7 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
         val panelContent: @Composable () -> Unit = { CompositionLocalProvider(LocalContentColor provides Color.White) {
             when (panel) {
                 Panel.LIST -> PlaylistPanel(
-                    title = groupName, videos = playlist, lib = lib, currentId = video?.id,
+                    title = groupName, items = playlist, lib = lib, currentKey = item?.key,
                     onClose = { panel = null },
                     onPick = { vm.pick(it); panel = null; controlsVisible = true; touch() },
                 )
@@ -682,8 +691,21 @@ fun PlayerScreen(vm: PlayerViewModel, onExit: () -> Unit) {
 
     // ---- 대화상자 ----
     val v = video
-    if (showRating && v != null) {
-        RatingDialog(current = lib.ratings[v.id], onDismiss = { showRating = false; touch() }) { vm.repo.setRating(v, it) }
+    val it0 = item
+    if (showRating && it0 != null) {
+        RatingDialog(current = lib.ratingOf(it0), onDismiss = { showRating = false; touch() }) { vm.repo.setRating(it0, it) }
+    }
+    comboToDelete?.let { c ->
+        ConfirmDialog(
+            "조합 지우기", "'${c.name}' 조합을 지울까요?\n원본 동영상은 지워지지 않아요.",
+            onDismiss = { comboToDelete = null; touch() },
+        ) {
+            val next = vm.nextAfterDelete()
+            vm.repo.deleteCombo(c.combo.id)
+            Toast.makeText(ctx, "조합을 지웠어요", Toast.LENGTH_SHORT).show()
+            vm.afterDeleted(c.key, next)
+            if (next == null) onExit()
+        }
     }
     flagToDelete?.let { f ->
         ConfirmDialog("플래그 삭제", "${formatTime(f.positionMs)} 플래그를 삭제할까요?", onDismiss = { flagToDelete = null; touch() }) {
@@ -797,13 +819,13 @@ private fun PanelHeader(title: String, action: String, onAction: () -> Unit) {
 @Composable
 private fun PlaylistPanel(
     title: String,
-    videos: List<Video>,
+    items: List<PlayItem>,
     lib: Library,
-    currentId: Long?,
+    currentKey: String?,
     onClose: () -> Unit,
-    onPick: (Video) -> Unit,
+    onPick: (PlayItem) -> Unit,
 ) {
-    val idx = videos.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+    val idx = items.indexOfFirst { it.key == currentKey }.coerceAtLeast(0)
     val state = rememberLazyGridState(initialFirstVisibleItemIndex = idx)
     Column {
         Row(
@@ -811,7 +833,7 @@ private fun PlaylistPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text("  ${videos.size}개", color = SubText, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text("  ${items.size}개", color = SubText, fontSize = 12.sp, modifier = Modifier.weight(1f))
             IconButton(onClick = onClose) { Icon(Icons.Default.Close, "닫기", tint = SubText) }
         }
         LazyVerticalGrid(
@@ -821,12 +843,12 @@ private fun PlaylistPanel(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            items(videos, key = { it.id }) { v ->
-                VideoCell(
-                    video = v,
-                    rating = lib.ratings[v.id],
-                    highlighted = v.id == currentId,
-                    onClick = { onPick(v) },
+            items(items, key = { it.key }) { pi ->
+                PlayItemCell(
+                    item = pi,
+                    rating = lib.ratingOf(pi),
+                    highlighted = pi.key == currentKey,
+                    onClick = { onPick(pi) },
                 )
             }
         }

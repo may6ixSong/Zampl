@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,12 @@ fun FilmStrip(
         var dragPos by remember { mutableStateOf<Long?>(null) }
         val dur = durationMs.coerceAtLeast(1)
         val shown = dragPos ?: positionMs.coerceIn(0, dur)
+
+        // 끄는 도중 썸네일 줄이 사라져도(도구 숨김 등) 재생이 멈춘 채로 남지 않게 마무리
+        val endScrub by rememberUpdatedState(onScrubEnd)
+        DisposableEffect(Unit) {
+            onDispose { dragPos?.let { endScrub(it) } }
+        }
 
         val curPos by rememberUpdatedState(positionMs.coerceIn(0, dur))
         val curDur by rememberUpdatedState(dur)

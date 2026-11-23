@@ -1,6 +1,7 @@
 package com.zampl.player.data
 
 import android.content.Context
+import androidx.room.AutoMigration
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -67,6 +68,33 @@ data class VideoInfoEntity(
     val name: String,
     val sizeBytes: Long,
     val durationMs: Long,
+)
+
+/** 커스텀 조합: 여러 동영상을 순서대로 이어 붙여 하나처럼 재생 (최대 10개) */
+@Entity(tableName = "combos")
+data class ComboEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long,
+    /** 조합 자체의 평점 (없으면 null) */
+    val stars: Int? = null,
+)
+
+@Entity(
+    tableName = "combo_items",
+    primaryKeys = ["comboId", "position"],
+    foreignKeys = [ForeignKey(
+        entity = ComboEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["comboId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("videoId")],
+)
+data class ComboItemEntity(
+    val comboId: Long,
+    val position: Int,
+    val videoId: Long,
 )
 
 @Dao
@@ -139,8 +167,75 @@ interface ZamplDao {
     @Query("DELETE FROM video_info WHERE videoId = :oldId")
     suspend fun deleteVideoInfo(oldId: Long)
 
+    // 커스텀 조합
+    @Query("SELECT * FROM combos")
+    fun observeCombos(): Flow<List<ComboEntity>>
+
+    @Query("SELECT * FROM combo_items ORDER BY comboId, position")
+    fun observeComboItems(): Flow<List<ComboItemEntity>>
+
+    @Insert
+    suspend fun insertCombo(combo: ComboEntity): Long
+
+    @Insert
+    suspend fun insertComboItems(items: List<ComboItemEntity>)
+
+    @Transaction
+    suspend fun createCombo(combo: ComboEntity, videoIds: List<Long>): Long {
+        val id = insertCombo(combo)
+        insertComboItems(videoIds.mapIndexed { i, v -> ComboItemEntity(id, i, v) })
+        return id
+    }
+
+    @Query("UPDATE combos SET name = :name WHERE id = :id")
+    suspend fun renameCombo(id: Long, name: String)
+
+    @Query("UPDATE combos SET stars = :stars WHERE id = :id")
+    suspend fun setComboStars(id: Long, stars: Int?)
+
+    @Query("DELETE FROM combos WHERE id = :id")
+    suspend fun deleteCombo(id: Long)
+
+    @Query("UPDATE combo_items SET videoId = :newId WHERE videoId = :oldId")
+    suspend fun remapComboItems(oldId: Long, newId: Long)
+
+    // 데이터 정리: 저장된 데이터가 가리키는 모든 동영상 ID
+    @Query(
+        "SELECT videoId FROM group_videos UNION SELECT videoId FROM ratings UNION SELECT videoId FROM flags " +
+            "UNION SELECT videoId FROM combo_items UNION SELECT videoId FROM video_info"
+    )
+    suspend fun referencedVideoIds(): List<Long>
+
+    @Query("SELECT COUNT(*) FROM group_videos WHERE videoId IN (:ids)")
+    suspend fun countMemberships(ids: List<Long>): Int
+
+    @Query("SELECT COUNT(*) FROM ratings WHERE videoId IN (:ids)")
+    suspend fun countRatings(ids: List<Long>): Int
+
+    @Query("SELECT COUNT(*) FROM flags WHERE videoId IN (:ids)")
+    suspend fun countFlags(ids: List<Long>): Int
+
+    @Query("SELECT DISTINCT comboId FROM combo_items WHERE videoId IN (:ids)")
+    suspend fun combosUsing(ids: List<Long>): List<Long>
+
+    @Query("DELETE FROM group_videos WHERE videoId IN (:ids)")
+    suspend fun deleteMembershipsFor(ids: List<Long>)
+
+    @Query("DELETE FROM ratings WHERE videoId IN (:ids)")
+    suspend fun deleteRatingsFor(ids: List<Long>)
+
+    @Query("DELETE FROM flags WHERE videoId IN (:ids)")
+    suspend fun deleteFlagsFor(ids: List<Long>)
+
+    @Query("DELETE FROM video_info WHERE videoId IN (:ids)")
+    suspend fun deleteVideoInfoFor(ids: List<Long>)
+
+    @Query("DELETE FROM combos WHERE id IN (:comboIds)")
+    suspend fun deleteCombos(comboIds: List<Long>)
+
     @Transaction
     suspend fun remapVideo(oldId: Long, newInfo: VideoInfoEntity) {
+        remapComboItems(oldId, newInfo.videoId)
         remapMemberships(oldId, newInfo.videoId)
         deleteMembershipsOf(oldId)
         remapRating(oldId, newInfo.videoId)
@@ -158,9 +253,13 @@ interface ZamplDao {
         RatingEntity::class,
         FlagEntity::class,
         VideoInfoEntity::class,
+        ComboEntity::class,
+        ComboItemEntity::class,
     ],
-    version = 1,
+    // v2: 커스텀 조합 테이블 추가 (기존 데이터는 자동 변환으로 그대로 유지)
+    version = 2,
     exportSchema = true,
+    autoMigrations = [AutoMigration(from = 1, to = 2)],
 )
 abstract class ZamplDatabase : RoomDatabase() {
     abstract fun dao(): ZamplDao

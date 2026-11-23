@@ -12,10 +12,62 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 const val ALL_GROUP_ID = -1L
 /** 어떤 그룹에도 들어있지 않은 동영상 모음 (자동) */
 const val UNGROUPED_GROUP_ID = -2L
+/** 커스텀 조합 모음 (자동, 조합만 들어감) */
+const val CUSTOM_GROUP_ID = -3L
+/** 조합 하나에 넣을 수 있는 최대 동영상 수 */
+const val MAX_COMBO_SIZE = 10
+
+/** 커스텀 조합: 동영상 여러 개를 순서대로 이어 하나처럼 재생 */
+data class Combo(
+    val id: Long,
+    val name: String,
+    val createdAt: Long,
+    val videos: List<Video>,
+    val stars: Int?,
+) {
+    val durationMs get() = videos.sumOf { it.durationMs }
+}
+
+/** 재생 단위: 동영상 하나 또는 커스텀 조합 하나 */
+sealed interface PlayItem {
+    /** 목록 안에서 구분하는 키 ("v12", "c3") */
+    val key: String
+    val name: String
+    val durationMs: Long
+    /** 이어 붙여 재생할 동영상들 (동영상 하나면 1개) */
+    val segments: List<Video>
+    val thumb: Video get() = segments.first()
+
+    data class Single(val video: Video) : PlayItem {
+        override val key get() = "v${video.id}"
+        override val name get() = video.name
+        override val durationMs get() = video.durationMs
+        override val segments get() = listOf(video)
+    }
+
+    data class Custom(val combo: Combo) : PlayItem {
+        override val key get() = "c${combo.id}"
+        override val name get() = combo.name
+        override val durationMs get() = combo.durationMs
+        override val segments get() = combo.videos
+    }
+}
+
+/** 데이터 정리 결과/미리보기 */
+data class CleanupReport(
+    val missingVideos: Int,
+    val memberships: Int,
+    val ratings: Int,
+    val flags: Int,
+    val combos: Int,
+) {
+    val isEmpty get() = memberships + ratings + flags + combos == 0
+}
 
 /** NORMAL: 일반 재생, RANDOM_GROUP: 그룹 안에서 랜덤, RANDOM_ALL: 전체 동영상 중 랜덤 (목록 없음) */
 enum class PlayMode { NORMAL, RANDOM_GROUP, RANDOM_ALL }
@@ -28,10 +80,18 @@ data class GroupSummary(
     val videos: List<Video>,
     val averageRating: Double?,
     val ratedCount: Int,
+    /** 커스텀 그룹일 때의 조합들 */
+    val combos: List<Combo> = emptyList(),
 ) {
+    val isCustom get() = id == CUSTOM_GROUP_ID
+    /** 목록에 표시하는 개수 */
+    val count get() = if (isCustom) combos.size else videos.size
+    /** 그룹 리스트 2x2 미리보기용 */
+    val previewVideos get() = if (isCustom) combos.map { it.videos.first() } else videos
+
     val isAll get() = id == ALL_GROUP_ID
     val isUngrouped get() = id == UNGROUPED_GROUP_ID
-    /** 기본 그룹(전체 동영상, 미분류): 항상 있고, 이름 변경·삭제·직접 추가 불가 */
+    /** 기본 그룹(전체 동영상, 미분류, 커스텀): 항상 있고, 이름 변경·삭제·직접 추가 불가 */
     val isDefault get() = id < 0
 }
 
@@ -42,8 +102,42 @@ data class Library(
     val groups: List<GroupSummary>,
     /** videoId -> 들어있는 그룹 ID 들 */
     val groupsOfVideo: Map<Long, Set<Long>>,
+    /** 동영상이 모두 남아 있는 조합들 */
+    val combos: List<Combo> = emptyList(),
 ) {
     private val byId = videos.associateBy { it.id }
+    private val comboById = combos.associateBy { it.id }
+
+    fun combo(id: Long) = comboById[id]
+
+    /** 재생 목록: 커스텀 그룹이면 조합들, 아니면 동영상들 */
+    fun itemsOf(groupId: Long, sort: SortOrder): List<PlayItem> =
+        if (groupId == CUSTOM_GROUP_ID) combosOf(sort).map { PlayItem.Custom(it) }
+        else videosOf(groupId, sort).map { PlayItem.Single(it) }
+
+    fun combosOf(sort: SortOrder): List<Combo> = when (sort) {
+        SortOrder.LATEST -> combos.sortedByDescending { it.createdAt }
+        SortOrder.RATING -> combos.sortedWith(compareByDescending<Combo> { it.stars ?: 0 }.thenByDescending { it.createdAt })
+        SortOrder.NAME -> combos.sortedBy { it.name.lowercase() }
+    }
+
+    fun item(key: String): PlayItem? = when (key.firstOrNull()) {
+        'v' -> key.drop(1).toLongOrNull()?.let { video(it) }?.let { PlayItem.Single(it) }
+        'c' -> key.drop(1).toLongOrNull()?.let { combo(it) }?.let { PlayItem.Custom(it) }
+        else -> null
+    }
+
+    fun ratingOf(item: PlayItem): Int? = when (item) {
+        is PlayItem.Single -> ratings[item.video.id]
+        is PlayItem.Custom -> combo(item.combo.id)?.stars
+    }
+
+    /** 평점과 상관없이 균등하게 하나 고름. exclude(키) 에 있는 것은 가능하면 피함. */
+    fun randomItem(groupId: Long, exclude: Set<String> = emptySet()): PlayItem? {
+        val pool = itemsOf(groupId, SortOrder.LATEST)
+        val fresh = pool.filter { it.key !in exclude }
+        return (fresh.ifEmpty { pool }).randomOrNull()
+    }
 
     fun video(id: Long) = byId[id]
     fun group(id: Long) = groups.firstOrNull { it.id == id }
@@ -63,6 +157,7 @@ data class Library(
     /** 평점과 상관없이 균등하게 하나 고름. exclude 에 있는 것은 가능하면 피함. */
     fun randomVideo(groupId: Long, exclude: Set<Long> = emptySet()): Video? {
         val pool = group(groupId)?.videos ?: return null
+        if (pool.isEmpty()) return null
         val fresh = pool.filter { it.id !in exclude }
         return (fresh.ifEmpty { pool }).randomOrNull()
     }
@@ -81,10 +176,13 @@ class LibraryRepository(
     private val loaded = MutableStateFlow(false)
     private val refreshLock = Mutex()
 
+    private val comboRows = combine(dao.observeCombos(), dao.observeComboItems()) { c, i -> c to i }
+    private val baseRows = combine(dao.observeGroups(), dao.observeMemberships(), dao.observeRatings()) { g, m, r -> Triple(g, m, r) }
+
     val library: StateFlow<Library> = combine(
-        videos, loaded, dao.observeGroups(), dao.observeMemberships(), dao.observeRatings(),
-    ) { vids, isLoaded, groups, members, ratingRows ->
-        buildLibrary(vids, isLoaded, groups, members, ratingRows)
+        videos, loaded, baseRows, comboRows,
+    ) { vids, isLoaded, base, combos ->
+        buildLibrary(vids, isLoaded, base.first, base.second, base.third, combos.first, combos.second)
     }.stateIn(scope, SharingStarted.Eagerly, Library.EMPTY)
 
     private fun buildLibrary(
@@ -93,6 +191,8 @@ class LibraryRepository(
         groups: List<GroupEntity>,
         members: List<GroupVideoEntity>,
         ratingRows: List<RatingEntity>,
+        comboEntities: List<ComboEntity>,
+        comboItems: List<ComboItemEntity>,
     ): Library {
         val byId = vids.associateBy { it.id }
         val ratings = ratingRows.associate { it.videoId to it.stars }
@@ -107,6 +207,18 @@ class LibraryRepository(
         summaries += GroupSummary(
             UNGROUPED_GROUP_ID, "미분류", ungrouped,
             if (ungroupedRated.isEmpty()) null else ungroupedRated.average(), ungroupedRated.size,
+        )
+        // 커스텀: 조합 모음. 조합 안 동영상이 하나라도 없으면 (데이터 정리 전까지) 숨김
+        val itemsByCombo = comboItems.groupBy { it.comboId }
+        val combos = comboEntities.mapNotNull { c ->
+            val vs = itemsByCombo[c.id].orEmpty().sortedBy { it.position }.map { byId[it.videoId] }
+            if (vs.isEmpty() || vs.any { it == null }) null
+            else Combo(c.id, c.name, c.createdAt, vs.filterNotNull(), c.stars)
+        }
+        val comboRated = combos.mapNotNull { it.stars }
+        summaries += GroupSummary(
+            CUSTOM_GROUP_ID, "커스텀", emptyList(),
+            if (comboRated.isEmpty()) null else comboRated.average(), comboRated.size, combos,
         )
         for (g in groups) {
             val gv = membersByGroup[g.id].orEmpty()
@@ -123,7 +235,7 @@ class LibraryRepository(
             )
         }
         val groupsOfVideo = members.groupBy({ it.videoId }, { it.groupId }).mapValues { it.value.toSet() }
-        return Library(isLoaded, vids, ratings, summaries, groupsOfVideo)
+        return Library(isLoaded, vids, ratings, summaries, groupsOfVideo, combos)
     }
 
     fun refresh() {
@@ -206,6 +318,68 @@ class LibraryRepository(
                 dao.upsertVideoInfo(video.toInfo())
                 dao.upsertRating(RatingEntity(video.id, stars.coerceIn(1, 5)))
             }
+        }
+    }
+
+    // ---- 커스텀 조합 ----
+    fun createCombo(name: String, videos: List<Video>) {
+        val list = videos.take(MAX_COMBO_SIZE)
+        if (list.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            list.forEach { dao.upsertVideoInfo(it.toInfo()) }
+            dao.createCombo(ComboEntity(name = name.trim(), createdAt = System.currentTimeMillis()), list.map { it.id })
+        }
+    }
+
+    fun renameCombo(id: Long, name: String) {
+        scope.launch(Dispatchers.IO) { dao.renameCombo(id, name.trim()) }
+    }
+
+    fun setComboRating(id: Long, stars: Int?) {
+        scope.launch(Dispatchers.IO) { dao.setComboStars(id, stars?.coerceIn(1, 5)) }
+    }
+
+    fun deleteCombo(id: Long) {
+        scope.launch(Dispatchers.IO) { dao.deleteCombo(id) }
+    }
+
+    fun setRating(item: PlayItem, stars: Int?) = when (item) {
+        is PlayItem.Single -> setRating(item.video, stars)
+        is PlayItem.Custom -> setComboRating(item.combo.id, stars)
+    }
+
+    // ---- 데이터 정리 ----
+    /**
+     * 갤러리에 더 이상 없는 동영상의 데이터(그룹 소속, 평점, 플래그, 그 동영상이 들어간 조합)를 찾음.
+     * apply = true 면 실제로 지움. 갤러리를 읽지 못하면(권한 없음 등) null.
+     */
+    suspend fun cleanup(apply: Boolean): CleanupReport? = withContext(Dispatchers.IO) {
+        refreshLock.withLock {
+            val list = MediaStoreSource.queryAll(context)
+            if (list.isEmpty()) return@withLock null
+            videos.value = list
+            loaded.value = true
+            reconcile(list) // ID 가 바뀐 동영상은 먼저 옮겨서 지워지지 않게
+            val existing = list.mapTo(HashSet()) { it.id }
+            val missing = dao.referencedVideoIds().filter { it !in existing }
+            var members = 0; var rates = 0; var flagCount = 0
+            val comboIds = HashSet<Long>()
+            for (chunk in missing.chunked(500)) {
+                members += dao.countMemberships(chunk)
+                rates += dao.countRatings(chunk)
+                flagCount += dao.countFlags(chunk)
+                comboIds += dao.combosUsing(chunk)
+            }
+            if (apply) {
+                for (chunk in comboIds.toList().chunked(500)) dao.deleteCombos(chunk)
+                for (chunk in missing.chunked(500)) {
+                    dao.deleteMembershipsFor(chunk)
+                    dao.deleteRatingsFor(chunk)
+                    dao.deleteFlagsFor(chunk)
+                    dao.deleteVideoInfoFor(chunk)
+                }
+            }
+            CleanupReport(missing.size, members, rates, flagCount, comboIds.size)
         }
     }
 

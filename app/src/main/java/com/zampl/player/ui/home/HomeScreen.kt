@@ -5,6 +5,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,6 +39,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -69,12 +79,16 @@ import com.zampl.player.data.ALL_GROUP_ID
 import com.zampl.player.data.GroupSummary
 import com.zampl.player.data.Library
 import com.zampl.player.data.LibraryRepository
+import com.zampl.player.data.CleanupReport
+import com.zampl.player.data.MAX_COMBO_SIZE
+import com.zampl.player.data.PlayItem
 import com.zampl.player.data.PlayMode
 import com.zampl.player.data.SortOrder
 import com.zampl.player.data.Video
 import com.zampl.player.ui.common.ConfirmDialog
 import com.zampl.player.ui.common.GroupCheckList
 import com.zampl.player.ui.common.NameDialog
+import com.zampl.player.ui.common.PlayItemCell
 import com.zampl.player.ui.common.VideoCell
 import com.zampl.player.ui.common.VideoThumbImage
 import com.zampl.player.ui.player.PlayerActivity
@@ -90,6 +104,9 @@ fun HomeScreen(modifier: Modifier = Modifier) {
 
     var selectedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var pickerFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    // 조합 만들기: 동영상을 고를 그룹 (커스텀 그룹에서는 먼저 그룹을 고름)
+    var comboSourceFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    var choosingComboSource by remember { mutableStateOf(false) }
     var sort by rememberSaveable { mutableStateOf(SortOrder.LATEST) }
 
     // 삭제된 그룹을 보고 있었다면 선택 해제
@@ -98,17 +115,20 @@ fun HomeScreen(modifier: Modifier = Modifier) {
         if (id != null && lib.loaded && lib.group(id) == null) selectedId = null
     }
 
-    val openVideo: (Long, Video) -> Unit = { groupId, video ->
-        ctx.startActivity(PlayerActivity.intent(ctx, groupId, video.id, sort))
+    val openItem: (Long, PlayItem) -> Unit = { groupId, item ->
+        ctx.startActivity(PlayerActivity.intent(ctx, groupId, item.key, sort))
+    }
+    val makeCombo: (GroupSummary) -> Unit = { g ->
+        if (g.isCustom) choosingComboSource = true else comboSourceFor = g.id
     }
     // 랜덤 재생: 평점과 상관없이 하나 골라 재생. 전체 동영상이면 목록 없이 '다음 랜덤'만.
     val playRandom: (Long) -> Unit = { groupId ->
-        val v = lib.randomVideo(groupId)
-        if (v == null) {
+        val item = lib.randomItem(groupId)
+        if (item == null) {
             Toast.makeText(ctx, "재생할 동영상이 없어요", Toast.LENGTH_SHORT).show()
         } else {
             val mode = if (groupId == ALL_GROUP_ID) PlayMode.RANDOM_ALL else PlayMode.RANDOM_GROUP
-            ctx.startActivity(PlayerActivity.intent(ctx, groupId, v.id, sort, mode))
+            ctx.startActivity(PlayerActivity.intent(ctx, groupId, item.key, sort, mode))
         }
     }
 
@@ -116,7 +136,19 @@ fun HomeScreen(modifier: Modifier = Modifier) {
         val wide = maxWidth >= 600.dp
         val listWidth = (maxWidth * 0.36f).coerceIn(280.dp, 420.dp)
         val picker = pickerFor?.let { lib.group(it) }
+        val comboSource = comboSourceFor?.let { lib.group(it) }
         when {
+            comboSource != null -> ComboBuilderScreen(
+                source = comboSource,
+                lib = lib,
+                sort = sort,
+                onClose = { comboSourceFor = null },
+                onCreate = { name, vids ->
+                    repo.createCombo(name, vids)
+                    comboSourceFor = null
+                    Toast.makeText(ctx, "'$name' 조합을 커스텀에 추가했어요", Toast.LENGTH_SHORT).show()
+                },
+            )
             picker != null -> PickerScreen(
                 group = picker,
                 lib = lib,
@@ -139,8 +171,9 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                         group = g, lib = lib, repo = repo, sort = sort, onSort = { sort = it },
                         showBack = false, onBack = {},
                         onOpenPicker = { pickerFor = g.id },
-                        onOpenVideo = { openVideo(g.id, it) },
+                        onOpenItem = { openItem(g.id, it) },
                         onRandom = { playRandom(g.id) },
+                        onMakeCombo = { makeCombo(g) },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                 }
@@ -157,14 +190,43 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     group = g, lib = lib, repo = repo, sort = sort, onSort = { sort = it },
                     showBack = true, onBack = { selectedId = null },
                     onOpenPicker = { pickerFor = g.id },
-                    onOpenVideo = { openVideo(g.id, it) },
+                    onOpenItem = { openItem(g.id, it) },
                     onRandom = { playRandom(g.id) },
+                    onMakeCombo = { makeCombo(g) },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
         }
         BackHandler(enabled = pickerFor != null) { pickerFor = null }
-        BackHandler(enabled = pickerFor == null && !wide && selectedId != null) { selectedId = null }
+        BackHandler(enabled = comboSourceFor != null) { comboSourceFor = null }
+        BackHandler(enabled = pickerFor == null && comboSourceFor == null && !wide && selectedId != null) { selectedId = null }
+    }
+
+    // 커스텀 그룹에서 '새 조합 만들기': 동영상을 고를 그룹 선택
+    if (choosingComboSource) {
+        AlertDialog(
+            onDismissRequest = { choosingComboSource = false },
+            title = { Text("어느 그룹에서 고를까요?") },
+            text = {
+                LazyColumn {
+                    items(lib.groups.filter { !it.isCustom }, key = { it.id }) { g ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { choosingComboSource = false; comboSourceFor = g.id }
+                                .padding(horizontal = 8.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(g.name, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                            Text("${g.count}개", color = SubText, fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { choosingComboSource = false }) { Text("취소") } },
+        )
     }
 }
 
@@ -184,6 +246,24 @@ private fun GroupListPane(
     var menuFor by remember { mutableStateOf<GroupSummary?>(null) }
     var renaming by remember { mutableStateOf<GroupSummary?>(null) }
     var deleting by remember { mutableStateOf<GroupSummary?>(null) }
+    var listMenu by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // 데이터 정리: null = 닫힘, Checking = 확인 중, Ready = 결과 보여주는 중
+    var cleanup by remember { mutableStateOf<CleanupState?>(null) }
+    val startCleanup = {
+        if (!hasFullVideoAccess(ctx)) {
+            Toast.makeText(ctx, "모든 동영상 접근을 허용해야 데이터 정리를 할 수 있어요", Toast.LENGTH_LONG).show()
+        } else {
+            cleanup = CleanupState.Checking
+            scope.launch {
+                val r = repo.cleanup(apply = false)
+                cleanup = if (r == null) {
+                    Toast.makeText(ctx, "갤러리를 읽지 못해서 정리할 수 없어요", Toast.LENGTH_SHORT).show(); null
+                } else CleanupState.Ready(r)
+            }
+        }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -194,6 +274,16 @@ private fun GroupListPane(
                     TextButton(onClick = onRandomAll) {
                         Icon(Icons.Default.Shuffle, null, modifier = Modifier.size(18.dp))
                         Text(" 전체 랜덤")
+                    }
+                    Box {
+                        IconButton(onClick = { listMenu = true }) { Icon(Icons.Default.MoreVert, "더보기") }
+                        DropdownMenu(expanded = listMenu, onDismissRequest = { listMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("데이터 정리") },
+                                leadingIcon = { Icon(Icons.Default.CleaningServices, null) },
+                                onClick = { listMenu = false; startCleanup() },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -242,6 +332,66 @@ private fun GroupListPane(
             onDismiss = { deleting = null },
         ) { repo.deleteGroup(g.id) }
     }
+    when (val c = cleanup) {
+        null -> {}
+        CleanupState.Checking -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("데이터 정리") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Text("   갤러리와 비교하는 중…")
+                }
+            },
+            confirmButton = {},
+        )
+        is CleanupState.Ready -> {
+            val r = c.report
+            AlertDialog(
+                onDismissRequest = { cleanup = null },
+                title = { Text("데이터 정리") },
+                text = {
+                    if (r.isEmpty) Text("정리할 데이터가 없어요.\n모든 데이터가 갤러리에 있는 동영상을 가리키고 있어요.")
+                    else Text(
+                        "갤러리에 더 이상 없는 동영상 ${r.missingVideos}개의 데이터를 지웁니다.\n\n" +
+                            "• 그룹 소속 ${r.memberships}건\n" +
+                            "• 평점 ${r.ratings}건\n" +
+                            "• 플래그 ${r.flags}건\n" +
+                            "• 커스텀 조합 ${r.combos}개 (빠진 동영상이 들어있는 조합)\n\n" +
+                            "휴지통에 있는 동영상도 없는 것으로 처리돼요. 지운 데이터는 되돌릴 수 없어요."
+                    )
+                },
+                confirmButton = {
+                    if (r.isEmpty) TextButton(onClick = { cleanup = null }) { Text("확인") }
+                    else TextButton(onClick = {
+                        cleanup = CleanupState.Checking
+                        scope.launch {
+                            val done = repo.cleanup(apply = true)
+                            cleanup = null
+                            Toast.makeText(
+                                ctx,
+                                if (done == null) "갤러리를 읽지 못해서 정리하지 않았어요" else "데이터를 정리했어요",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }) { Text("정리하기") }
+                },
+                dismissButton = { if (!r.isEmpty) TextButton(onClick = { cleanup = null }) { Text("취소") } },
+            )
+        }
+    }
+}
+
+private sealed interface CleanupState {
+    data object Checking : CleanupState
+    data class Ready(val report: CleanupReport) : CleanupState
+}
+
+/** 부분 허용(일부 동영상만 선택)이면 나머지를 '없는 동영상'으로 오해하므로 정리하지 않음 */
+private fun hasFullVideoAccess(ctx: android.content.Context): Boolean {
+    val perm = if (android.os.Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_VIDEO
+    else android.Manifest.permission.READ_EXTERNAL_STORAGE
+    return androidx.core.content.ContextCompat.checkSelfPermission(ctx, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
 }
 
 @Composable
@@ -262,7 +412,7 @@ private fun GroupRow(group: GroupSummary, selected: Boolean, modifier: Modifier)
         ) {
             for (r in 0..1) Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 for (c in 0..1) {
-                    val v = group.videos.getOrNull(r * 2 + c)
+                    val v = group.previewVideos.getOrNull(r * 2 + c)
                     Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFF1C1F25))) {
                         if (v != null) VideoThumbImage(v, Modifier.fillMaxSize())
                     }
@@ -277,7 +427,7 @@ private fun GroupRow(group: GroupSummary, selected: Boolean, modifier: Modifier)
             }
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${group.videos.size}개", color = SubText, fontSize = 13.sp)
+                Text(if (group.isCustom) "조합 ${group.count}개" else "${group.count}개", color = SubText, fontSize = 13.sp)
                 if (!group.isAll) {
                     val avg = group.averageRating
                     if (avg != null) {
@@ -317,17 +467,21 @@ private fun GroupDetailPane(
     showBack: Boolean,
     onBack: () -> Unit,
     onOpenPicker: () -> Unit,
-    onOpenVideo: (Video) -> Unit,
+    onOpenItem: (PlayItem) -> Unit,
     onRandom: () -> Unit,
+    onMakeCombo: () -> Unit,
     modifier: Modifier,
 ) {
+    var comboMenu by remember { mutableStateOf<PlayItem.Custom?>(null) }
+    var renamingCombo by remember { mutableStateOf<PlayItem.Custom?>(null) }
+    var deletingCombo by remember { mutableStateOf<PlayItem.Custom?>(null) }
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var videoMenu by remember { mutableStateOf<Video?>(null) }
     var groupSheetFor by remember { mutableStateOf<Video?>(null) }
     var createFor by remember { mutableStateOf<Video?>(null) }
-    val videos = remember(lib, group.id, sort) { lib.videosOf(group.id, sort) }
+    val items = remember(lib, group.id, sort) { lib.itemsOf(group.id, sort) }
 
     Scaffold(
         modifier = modifier,
@@ -346,6 +500,10 @@ private fun GroupDetailPane(
                 },
                 actions = {
                     IconButton(onClick = onRandom) { Icon(Icons.Default.Shuffle, "랜덤 재생") }
+                    // 조합 만들기: 이 그룹의 동영상을 순서대로 골라 이어 붙임 (커스텀이면 그룹부터 고름)
+                    IconButton(onClick = onMakeCombo) {
+                        Icon(Icons.Default.LibraryAdd, if (group.isCustom) "새 조합 만들기" else "조합 만들기")
+                    }
                     if (!group.isDefault) {
                         IconButton(onClick = onOpenPicker) { Icon(Icons.Default.Add, "동영상 추가") }
                         Box {
@@ -371,16 +529,18 @@ private fun GroupDetailPane(
                     FilterChip(selected = s == sort, onClick = { onSort(s) }, label = { Text(s.label) })
                 }
             }
-            if (videos.isEmpty()) {
+            if (items.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             if (!lib.loaded) "불러오는 중…"
                             else if (group.isAll) "동영상이 없어요"
                             else if (group.isUngrouped) "모든 동영상이 그룹에 들어가 있어요"
+                            else if (group.isCustom) "아직 조합이 없어요"
                             else "아직 동영상이 없어요", color = SubText,
                         )
                         if (!group.isDefault) TextButton(onClick = onOpenPicker) { Text("＋ 동영상 추가하기") }
+                        if (group.isCustom) TextButton(onClick = onMakeCombo) { Text("＋ 새 조합 만들기") }
                     }
                 }
             } else {
@@ -391,12 +551,26 @@ private fun GroupDetailPane(
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(videos, key = { it.id }) { v ->
+                    items(items, key = { it.key }) { pi ->
+                        if (pi is PlayItem.Custom) Box {
+                            // 커스텀 조합: 그룹 지정 불가, 이름 변경·지우기만
+                            PlayItemCell(
+                                item = pi,
+                                rating = lib.ratingOf(pi),
+                                onClick = { onOpenItem(pi) },
+                                onLongClick = { comboMenu = pi },
+                            )
+                            DropdownMenu(expanded = comboMenu?.key == pi.key, onDismissRequest = { comboMenu = null }) {
+                                DropdownMenuItem(text = { Text("이름 변경") }, onClick = { renamingCombo = pi; comboMenu = null })
+                                DropdownMenuItem(text = { Text("조합 지우기") }, onClick = { deletingCombo = pi; comboMenu = null })
+                            }
+                        }
+                        val v = (pi as? PlayItem.Single)?.video ?: return@items
                         Box {
                             VideoCell(
                                 video = v,
                                 rating = lib.ratings[v.id],
-                                onClick = { onOpenVideo(v) },
+                                onClick = { onOpenItem(pi) },
                                 onLongClick = { videoMenu = v },
                             )
                             DropdownMenu(expanded = videoMenu?.id == v.id, onDismissRequest = { videoMenu = null }) {
@@ -435,6 +609,102 @@ private fun GroupDetailPane(
         "그룹 삭제", "'${group.name}' 그룹을 삭제할까요?\n동영상 파일은 삭제되지 않아요.",
         onDismiss = { deleting = false },
     ) { repo.deleteGroup(group.id); onBack() }
+    renamingCombo?.let { c ->
+        NameDialog("조합 이름 변경", initial = c.name, confirmLabel = "변경", onDismiss = { renamingCombo = null }) {
+            repo.renameCombo(c.combo.id, it); renamingCombo = null
+        }
+    }
+    deletingCombo?.let { c ->
+        ConfirmDialog(
+            "조합 지우기", "'${c.name}' 조합을 지울까요?\n원본 동영상은 지워지지 않아요.",
+            onDismiss = { deletingCombo = null },
+        ) { repo.deleteCombo(c.combo.id) }
+    }
+}
+
+// ---------------- 조합 만들기: 동영상을 순서대로 선택 (최대 10개) ----------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ComboBuilderScreen(
+    source: GroupSummary,
+    lib: Library,
+    sort: SortOrder,
+    onClose: () -> Unit,
+    onCreate: (String, List<Video>) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val order = remember(source.id) { mutableStateListOf<Long>() }
+    var naming by remember { mutableStateOf(false) }
+    val videos = remember(lib, source.id, sort) { lib.videosOf(source.id, sort) }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Default.Close, "닫기") } },
+                title = {
+                    Column {
+                        Text("조합 만들기", maxLines = 1)
+                        Text("${source.name} · 재생할 순서대로 선택 (최대 ${MAX_COMBO_SIZE}개)", fontSize = 12.sp, color = SubText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { naming = true }, enabled = order.size >= 2) {
+                        Text("다음 (${order.size})", fontSize = 15.sp)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            )
+        },
+    ) { pad ->
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 108.dp),
+            contentPadding = PaddingValues(start = 3.dp, end = 3.dp, top = pad.calculateTopPadding() + 4.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            items(videos, key = { it.id }) { v ->
+                val n = order.indexOf(v.id) + 1
+                Box {
+                    VideoCell(
+                        video = v,
+                        rating = lib.ratings[v.id],
+                        highlighted = n > 0,
+                        onClick = {
+                            when {
+                                n > 0 -> order.remove(v.id)
+                                order.size >= MAX_COMBO_SIZE ->
+                                    Toast.makeText(ctx, "최대 ${MAX_COMBO_SIZE}개까지 고를 수 있어요", Toast.LENGTH_SHORT).show()
+                                else -> order.add(v.id)
+                            }
+                        },
+                    )
+                    // 선택 순서 번호
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp)
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(if (n > 0) MaterialTheme.colorScheme.primary else Color(0x55000000))
+                            .border(2.dp, if (n > 0) MaterialTheme.colorScheme.primary else Color.White, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (n > 0) Text("$n", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+    if (naming) {
+        NameDialog(
+            "조합 이름", initial = "조합 ${lib.combos.size + 1}", confirmLabel = "만들기",
+            onDismiss = { naming = false },
+        ) { name ->
+            naming = false
+            onCreate(name, order.mapNotNull { lib.video(it) })
+        }
+    }
 }
 
 // ---------------- 그룹 안에서 전체 동영상 중 선택 ----------------

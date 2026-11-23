@@ -35,7 +35,7 @@ class PlayerActivity : ComponentActivity() {
 
         vm.init(
             groupId = intent.getLongExtra(EXTRA_GROUP, -1L),
-            videoId = intent.getLongExtra(EXTRA_VIDEO, -1L),
+            key = intent.getStringExtra(EXTRA_KEY) ?: "v${intent.getLongExtra(EXTRA_VIDEO, -1L)}",
             sort = SortOrder.entries.getOrElse(intent.getIntExtra(EXTRA_SORT, 0)) { SortOrder.LATEST },
             mode = PlayMode.entries.getOrElse(intent.getIntExtra(EXTRA_MODE, 0)) { PlayMode.NORMAL },
         )
@@ -82,11 +82,16 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_VIDEO = "video"
         private const val EXTRA_SORT = "sort"
         private const val EXTRA_MODE = "mode"
+        private const val EXTRA_KEY = "key"
 
         fun intent(ctx: Context, groupId: Long, videoId: Long, sort: SortOrder, mode: PlayMode = PlayMode.NORMAL) =
+            intent(ctx, groupId, "v$videoId", sort, mode)
+
+        /** key: "v동영상ID" 또는 "c조합ID" */
+        fun intent(ctx: Context, groupId: Long, key: String, sort: SortOrder, mode: PlayMode = PlayMode.NORMAL) =
             Intent(ctx, PlayerActivity::class.java)
                 .putExtra(EXTRA_GROUP, groupId)
-                .putExtra(EXTRA_VIDEO, videoId)
+                .putExtra(EXTRA_KEY, key)
                 .putExtra(EXTRA_SORT, sort.ordinal)
                 .putExtra(EXTRA_MODE, mode.ordinal)
     }
