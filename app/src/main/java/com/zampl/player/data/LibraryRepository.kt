@@ -343,6 +343,12 @@ class LibraryRepository(
         scope.launch(Dispatchers.IO) { dao.deleteCombo(id) }
     }
 
+    /** 여러 조합 한 번에 지우기 (원본 동영상은 그대로) */
+    fun deleteCombos(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        scope.launch(Dispatchers.IO) { ids.chunked(500).forEach { dao.deleteCombos(it) } }
+    }
+
     fun setRating(item: PlayItem, stars: Int?) = when (item) {
         is PlayItem.Single -> setRating(item.video, stars)
         is PlayItem.Custom -> setComboRating(item.combo.id, stars)

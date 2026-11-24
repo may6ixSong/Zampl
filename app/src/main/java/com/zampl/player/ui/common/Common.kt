@@ -223,6 +223,8 @@ fun PlayItemCell(
     rating: Int?,
     modifier: Modifier = Modifier,
     highlighted: Boolean = false,
+    /** null 이면 선택 표시 없음 */
+    selected: Boolean? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -231,6 +233,7 @@ fun PlayItemCell(
         rating = rating,
         modifier = modifier,
         highlighted = highlighted,
+        selected = selected,
         badge = if (item is PlayItem.Custom) "▶ ${item.segments.size}개" else null,
         durationMs = item.durationMs,
         onClick = onClick,

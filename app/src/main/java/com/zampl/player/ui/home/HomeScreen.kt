@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.LibraryAdd
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -475,6 +477,13 @@ private fun GroupDetailPane(
     var comboMenu by remember { mutableStateOf<PlayItem.Custom?>(null) }
     var renamingCombo by remember { mutableStateOf<PlayItem.Custom?>(null) }
     var deletingCombo by remember { mutableStateOf<PlayItem.Custom?>(null) }
+    // 커스텀 그룹: 여러 조합을 골라 한 번에 지우기
+    var selecting by remember(group.id) { mutableStateOf(false) }
+    val selectedCombos = remember(group.id) { mutableStateListOf<Long>() }
+    var confirmBulkDelete by remember { mutableStateOf(false) }
+    val exitSelect = { selecting = false; selectedCombos.clear() }
+    // 선택 모드에 들어갈 때 새로 등록해야 화면 전체의 뒤로가기보다 먼저 처리됨
+    if (selecting) BackHandler { exitSelect() }
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -486,7 +495,22 @@ private fun GroupDetailPane(
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(
+            if (selecting) TopAppBar(
+                navigationIcon = { IconButton(onClick = exitSelect) { Icon(Icons.Default.Close, "선택 끝내기") } },
+                title = { Text("${selectedCombos.size}개 선택", fontWeight = FontWeight.Bold) },
+                actions = {
+                    val allIds = group.combos.map { it.id }
+                    val allSelected = allIds.isNotEmpty() && selectedCombos.containsAll(allIds)
+                    TextButton(onClick = {
+                        selectedCombos.clear()
+                        if (!allSelected) selectedCombos.addAll(allIds)
+                    }) { Text(if (allSelected) "전체 해제" else "전체 선택") }
+                    IconButton(onClick = { confirmBulkDelete = true }, enabled = selectedCombos.isNotEmpty()) {
+                        Icon(Icons.Outlined.Delete, "선택한 조합 지우기")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            ) else TopAppBar(
                 navigationIcon = {
                     if (showBack) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로") }
                 },
@@ -499,6 +523,9 @@ private fun GroupDetailPane(
                     }
                 },
                 actions = {
+                    if (group.isCustom && group.combos.isNotEmpty()) {
+                        IconButton(onClick = { selecting = true }) { Icon(Icons.Default.Checklist, "여러 개 선택") }
+                    }
                     IconButton(onClick = onRandom) { Icon(Icons.Default.Shuffle, "랜덤 재생") }
                     // 조합 만들기: 이 그룹의 동영상을 순서대로 골라 이어 붙임 (커스텀이면 그룹부터 고름)
                     IconButton(onClick = onMakeCombo) {
@@ -554,13 +581,19 @@ private fun GroupDetailPane(
                     items(items, key = { it.key }) { pi ->
                         if (pi is PlayItem.Custom) Box {
                             // 커스텀 조합: 그룹 지정 불가, 이름 변경·지우기만
+                            val id = pi.combo.id
+                            val toggle = { if (id in selectedCombos) selectedCombos.remove(id) else selectedCombos.add(id) }
                             PlayItemCell(
                                 item = pi,
                                 rating = lib.ratingOf(pi),
-                                onClick = { onOpenItem(pi) },
-                                onLongClick = { comboMenu = pi },
+                                selected = if (selecting) id in selectedCombos else null,
+                                onClick = { if (selecting) toggle() else onOpenItem(pi) },
+                                onLongClick = { if (selecting) toggle() else comboMenu = pi },
                             )
                             DropdownMenu(expanded = comboMenu?.key == pi.key, onDismissRequest = { comboMenu = null }) {
+                                DropdownMenuItem(text = { Text("여러 개 선택") }, onClick = {
+                                    comboMenu = null; selecting = true; selectedCombos.clear(); selectedCombos.add(id)
+                                })
                                 DropdownMenuItem(text = { Text("이름 변경") }, onClick = { renamingCombo = pi; comboMenu = null })
                                 DropdownMenuItem(text = { Text("조합 지우기") }, onClick = { deletingCombo = pi; comboMenu = null })
                             }
@@ -619,6 +652,19 @@ private fun GroupDetailPane(
             "조합 지우기", "'${c.name}' 조합을 지울까요?\n원본 동영상은 지워지지 않아요.",
             onDismiss = { deletingCombo = null },
         ) { repo.deleteCombo(c.combo.id) }
+    }
+    if (confirmBulkDelete) {
+        val ctx = LocalContext.current
+        ConfirmDialog(
+            "조합 지우기",
+            "선택한 조합 ${selectedCombos.size}개를 지울까요?\n원본 동영상은 지워지지 않아요. 지운 조합은 되돌릴 수 없어요.",
+            onDismiss = { confirmBulkDelete = false },
+        ) {
+            val n = selectedCombos.size
+            repo.deleteCombos(selectedCombos.toList())
+            exitSelect()
+            Toast.makeText(ctx, "조합 ${n}개를 지웠어요", Toast.LENGTH_SHORT).show()
+        }
     }
 }
 
